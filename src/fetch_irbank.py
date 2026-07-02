@@ -93,6 +93,9 @@ def save_company(conn, code: str, csv_bytes: Optional[bytes], holder_bytes: Opti
         if csv_bytes:
             (raw_dir / "fy-data-all.csv").write_bytes(csv_bytes)
             fin_rows = parse_fy_csv(csv_bytes.decode("utf-8-sig", errors="replace"))
+            if fin_rows:
+                # 再取得時、収録期間から外れた古い年度が残らないよう入れ替える
+                conn.execute("DELETE FROM financials WHERE code = ?", (code,))
             for row in fin_rows:
                 values = [row.get(f) for f in FIN_FIELDS]
                 conn.execute(
@@ -105,6 +108,8 @@ def save_company(conn, code: str, csv_bytes: Optional[bytes], holder_bytes: Opti
         if holder_bytes:
             (raw_dir / "holder.html").write_bytes(holder_bytes)
             holder_rows = parse_holder_html(holder_bytes.decode("utf-8", errors="replace"))
+            if holder_rows:
+                conn.execute("DELETE FROM holders WHERE code = ?", (code,))
             for h in holder_rows:
                 conn.execute(
                     """INSERT OR REPLACE INTO holders(code, as_of, rank, holder_name, ratio)

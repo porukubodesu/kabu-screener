@@ -39,7 +39,7 @@ def main():
     now = datetime.now().isoformat(timespec="seconds")
 
     conn = get_conn()
-    upserted = 0
+    seen = set()
     with conn:
         for r in range(1, sh.nrows):
             market = str(sh.cell_value(r, 3)).strip()
@@ -58,9 +58,18 @@ def main():
                      updated_at=excluded.updated_at""",
                 (code, name, market.split("（")[0], sector33, scale, now),
             )
-            upserted += 1
+            seen.add(code)
+
+        # 上場廃止・市場外移動した銘柄を除去(壊れたファイルで全消ししないようガード)
+        removed = 0
+        if len(seen) > 3000:
+            placeholders = ",".join("?" * len(seen))
+            removed = conn.execute(
+                f"DELETE FROM companies WHERE code NOT IN ({placeholders})",
+                list(seen),
+            ).rowcount
     total = conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
-    print(f"上場銘柄マスタ更新: {upserted}件upsert / 合計{total}社")
+    print(f"上場銘柄マスタ更新: {len(seen)}件upsert / 廃止等の削除{removed}件 / 合計{total}社")
 
 
 if __name__ == "__main__":

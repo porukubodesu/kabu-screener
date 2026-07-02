@@ -165,17 +165,38 @@ def passes_hard_filter(m: Dict) -> bool:
 
 
 def percentile_map(values: Dict[str, Optional[float]]) -> Dict[str, float]:
-    """code->値 を code->パーセンタイル(0〜1) に変換。Noneは含めない。"""
-    items = sorted((v, c) for c, v in values.items() if v is not None)
+    """code->値 を code->パーセンタイル(0〜1) に変換。Noneは含めない。
+
+    同値には同じパーセンタイル(順位の平均)を与える。連続増収増益のような
+    整数指標で、コード順によってスコアが変わるのを防ぐ。
+    """
+    items = sorted(((v, c) for c, v in values.items() if v is not None),
+                   key=lambda t: t[0])
     n = len(items)
-    if n <= 1:
-        return {c: 0.5 for _, c in items}
-    return {c: i / (n - 1) for i, (_, c) in enumerate(items)}
+    if n == 0:
+        return {}
+    if n == 1:
+        return {items[0][1]: 0.5}
+    out: Dict[str, float] = {}
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and items[j + 1][0] == items[i][0]:
+            j += 1
+        pct = (i + j) / 2.0 / (n - 1)
+        for k in range(i, j + 1):
+            out[items[k][1]] = pct
+        i = j + 1
+    return out
 
 
 def load_all_metrics(conn) -> Dict[str, Dict]:
+    # 母集団は現在の上場銘柄のみ(上場廃止銘柄の残留データを除外)
     fins: Dict[str, List[Dict]] = {}
-    for r in conn.execute("SELECT * FROM financials ORDER BY code, fiscal_year"):
+    for r in conn.execute(
+        """SELECT f.* FROM financials f
+           JOIN companies c ON c.code = f.code
+           ORDER BY f.code, f.fiscal_year"""):
         fins.setdefault(r["code"], []).append(dict(r))
     holds: Dict[str, List[Dict]] = {}
     for r in conn.execute("SELECT * FROM holders"):

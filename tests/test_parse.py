@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 from src.parse_irbank import parse_fy_csv, parse_holder_html
-from src.screen import classify_holder, _consec_increases, _cagr
+from src.screen import classify_holder, _consec_increases, _cagr, percentile_map
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -80,6 +80,15 @@ class TestMetricsHelpers(unittest.TestCase):
         self.assertAlmostEqual(
             _cagr(["2022/03", "2026/03"], [100.0, 200.0]), 0.1892, places=3)
         self.assertIsNone(_cagr(["2026/03"], [100.0]))
+
+    def test_percentile_ties_get_same_value(self):
+        pct = percentile_map({"a": 1.0, "b": 2.0, "c": 2.0, "d": 3.0})
+        self.assertEqual(pct["b"], pct["c"])
+        self.assertEqual(pct["a"], 0.0)
+        self.assertEqual(pct["d"], 1.0)
+        self.assertAlmostEqual(pct["b"], 0.5)
+        self.assertEqual(percentile_map({"x": 5.0}), {"x": 0.5})
+        self.assertEqual(percentile_map({"x": None}), {})
 
 
 if __name__ == "__main__":

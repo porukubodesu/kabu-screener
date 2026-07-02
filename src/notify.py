@@ -31,8 +31,10 @@ def format_card(code: str, name: str, market: str, rank: int, score: float, m: d
         "",
         f"売上CAGR: {pct(m.get('rev_cagr'))}({m.get('years')}期分)",
         f"連続増収増益: {m.get('consec_growth')}期",
-        f"営業CFマージン: {m.get('op_cf_margin', '-')}%(3期平均)",
-        f"自己資本比率: {m.get('equity_ratio', '-')}%",
+        f"営業CFマージン: {m['op_cf_margin']:.1f}%(3期平均)" if m.get("op_cf_margin") is not None
+        else "営業CFマージン: -",
+        f"自己資本比率: {m['equity_ratio']:.1f}%" if m.get("equity_ratio") is not None
+        else "自己資本比率: -",
         f"株式数変化: {pct(m.get('dilution'), signed=True)}(希薄化チェック)",
         f"オーナー: {' / '.join(m.get('owner_names') or ['-'])}",
         "",
