@@ -37,9 +37,12 @@ def format_card(code: str, name: str, market: str, rank: int, score: float, m: d
         else "自己資本比率: -",
         f"株式数変化: {pct(m.get('dilution'), signed=True)}(希薄化チェック)",
         f"オーナー: {' / '.join(m.get('owner_names') or ['-'])}",
-        "",
-        f"四季報で確認 → https://irbank.net/{code}",
     ]
+    if m.get("vc_names"):
+        lines.append(f"VC保有: {' / '.join(m['vc_names'])}")
+    if m.get("business"):
+        lines += ["", f"事業: {m['business']}"]
+    lines += ["", f"四季報で確認 → https://irbank.net/{code}"]
     return "\n".join(lines)
 
 

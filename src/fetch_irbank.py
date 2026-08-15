@@ -84,13 +84,21 @@ def fetch_holder(session, code: str, sleep: float) -> Optional[bytes]:
     return content
 
 
+def has_edinet_financials(conn, code: str) -> bool:
+    """EDINET取り込み済みか。済みならEDINETを正とし、IR BANKの財務は使わない
+    (有報サマリー5年分の方が網羅的。大株主は時点が違うだけなので併記でよい)。"""
+    return conn.execute(
+        "SELECT 1 FROM financials WHERE code = ? AND source = 'edinet' LIMIT 1",
+        (code,)).fetchone() is not None
+
+
 def save_company(conn, code: str, csv_bytes: Optional[bytes], holder_bytes: Optional[bytes]):
     raw_dir = DATA_DIR / "raw" / code
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     fin_count = holder_count = 0
     with conn:
-        if csv_bytes:
+        if csv_bytes and not has_edinet_financials(conn, code):
             (raw_dir / "fy-data-all.csv").write_bytes(csv_bytes)
             fin_rows = parse_fy_csv(csv_bytes.decode("utf-8-sig", errors="replace"))
             if fin_rows:
@@ -109,7 +117,12 @@ def save_company(conn, code: str, csv_bytes: Optional[bytes], holder_bytes: Opti
             (raw_dir / "holder.html").write_bytes(holder_bytes)
             holder_rows = parse_holder_html(holder_bytes.decode("utf-8", errors="replace"))
             if holder_rows:
-                conn.execute("DELETE FROM holders WHERE code = ?", (code,))
+                # 再取得時の残留行は時点単位で入れ替えて消す。銘柄単位で消すと
+                # EDINETだけが持つ時点のスナップショットまで巻き添えになる
+                for as_of in {h["as_of"] for h in holder_rows}:
+                    conn.execute(
+                        "DELETE FROM holders WHERE code = ? AND as_of = ?",
+                        (code, as_of))
             for h in holder_rows:
                 conn.execute(
                     """INSERT OR REPLACE INTO holders(code, as_of, rank, holder_name, ratio)
@@ -150,8 +163,9 @@ def main():
     ap.add_argument("--codes", help="カンマ区切りの証券コード(指定時は強制再取得)")
     ap.add_argument("--limit", type=int, help="最大取得社数")
     ap.add_argument("--stale-days", type=int, help="この日数より古い取得分も対象にする")
-    ap.add_argument("--csv-sleep", type=float, default=12.0,
-                    help="CSV取得の間隔秒(f.irbank.netは制限が厳しい。既定12)")
+    ap.add_argument("--csv-sleep", type=float, default=190.0,
+                    help="CSV取得の間隔秒(f.irbank.netの実測クォータ約10件/30分に"
+                         "合わせた既定190。これ未満に下げない)")
     ap.add_argument("--sleep", type=float, default=3.0, help="HTMLページ取得の間隔秒(既定3)")
     ap.add_argument("--block-wait", type=float, default=1800,
                     help="表示制限検知時の待機秒(既定1800=30分)")
@@ -177,7 +191,12 @@ def main():
     while i < len(targets):
         code = targets[i]
         try:
-            csv_bytes = fetch_csv(session, code, args.csv_sleep)
+            # EDINET取り込み済みの銘柄は財務CSVを取得しない(捨てるデータのために
+            # 制限が厳しいf.irbank.netのクォータを消費しないため)。大株主だけ更新
+            if has_edinet_financials(conn, code):
+                csv_bytes = None
+            else:
+                csv_bytes = fetch_csv(session, code, args.csv_sleep)
             holder_bytes = fetch_holder(session, code, args.sleep)
         except RateLimited as e:
             blocked_streak += 1

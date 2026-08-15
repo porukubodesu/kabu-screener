@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS financials (
     code            TEXT NOT NULL,
     fiscal_year     TEXT NOT NULL,  -- '2026/03'
     is_forecast     INTEGER NOT NULL DEFAULT 0,
+    source          TEXT NOT NULL DEFAULT 'irbank',  -- 'irbank' / 'edinet'
+    shares_issued   INTEGER,        -- 発行済株式総数(EDINETのみ。希薄化計算用)
     revenue         INTEGER,
     op_income       INTEGER,
     ordinary_income INTEGER,
@@ -61,6 +63,27 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     status     TEXT NOT NULL        -- 'ok' / 'no_data' / 'error:...'
 );
 
+-- EDINETから取り込んだ書類の記録(fetch_logはIR BANK用なので分ける)。
+-- 差分更新のスキップ判定と、訂正報告書の追跡に使う
+CREATE TABLE IF NOT EXISTS edinet_docs (
+    doc_id        TEXT PRIMARY KEY, -- 書類管理番号('S100XXXX')
+    code          TEXT NOT NULL,
+    doc_type_code TEXT NOT NULL,    -- '120'=有報
+    period_end    TEXT,             -- 'YYYY-MM-DD'
+    submitted_at  TEXT,
+    fetched_at    TEXT NOT NULL,
+    status        TEXT NOT NULL     -- 'ok' / 'no_data' / 'error:...'
+);
+
+-- 有報「事業の内容」の全文(EDINET由来、HTML除去済み)。
+-- スクリーニング時のNGワード除外(screen.NG_BUSINESS_KEYWORDS)と表示に使う
+CREATE TABLE IF NOT EXISTS business (
+    code        TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    period_end  TEXT,             -- 由来した有報の期末('YYYY-MM-DD')
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS screen_results (
     run_date     TEXT NOT NULL,     -- 'YYYY-MM-DD'
     code         TEXT NOT NULL,
@@ -76,9 +99,21 @@ CREATE INDEX IF NOT EXISTS idx_financials_code ON financials(code);
 """
 
 
+def _migrate(conn):
+    """既存DBに後から増えた列を足す(CREATE IF NOT EXISTSでは列が増えないため)。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(financials)")}
+    if "source" not in cols:
+        conn.execute(
+            "ALTER TABLE financials ADD COLUMN source TEXT NOT NULL DEFAULT 'irbank'")
+    if "shares_issued" not in cols:
+        conn.execute("ALTER TABLE financials ADD COLUMN shares_issued INTEGER")
+
+
 def get_conn(db_path=DB_PATH):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    with conn:
+        _migrate(conn)
     return conn

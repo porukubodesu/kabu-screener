@@ -2,7 +2,8 @@ import unittest
 from pathlib import Path
 
 from src.parse_irbank import parse_fy_csv, parse_holder_html
-from src.screen import classify_holder, _consec_increases, _cagr, percentile_map
+from src.screen import (classify_holder, ng_business_keyword, _consec_increases,
+                        _cagr, _snippet, percentile_map)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -66,6 +67,23 @@ class TestClassifyHolder(unittest.TestCase):
     def test_vc(self):
         self.assertEqual(classify_holder("ジャフコSV4共有投資事業有限責任組合"), "vc")
         self.assertEqual(classify_holder("グロービス5号ファンド投資事業有限責任組合"), "vc")
+
+
+class TestNgBusiness(unittest.TestCase):
+    def test_keyword_hit_returns_keyword(self):
+        self.assertEqual(
+            ng_business_keyword("当社はパチンコホールの運営を主たる事業とする"),
+            "パチンコ")
+
+    def test_no_hit_and_missing_pass(self):
+        self.assertIsNone(ng_business_keyword("EC支援のSaaSを提供している"))
+        self.assertIsNone(ng_business_keyword(None))  # 事業内容が未取得なら通す
+        self.assertIsNone(ng_business_keyword(""))
+
+    def test_snippet_flattens_and_truncates(self):
+        self.assertEqual(_snippet("1行目\n2行目  詰める"), "1行目 2行目 詰める")
+        self.assertEqual(_snippet("あ" * 130), "あ" * 120 + "…")
+        self.assertIsNone(_snippet(None))
 
 
 class TestMetricsHelpers(unittest.TestCase):

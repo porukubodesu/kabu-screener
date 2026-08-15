@@ -20,9 +20,18 @@ from typing import Dict, List, Optional
 from .db import get_conn
 
 # ---- ハードフィルタ(最小限。ここを緩めて/締めて試行錯誤する) ----
-MIN_OWNER_RATIO = 10.0   # 個人大株主の合計保有率(%)がこれ以上
-EXCLUDE_VC = True        # 直近の大株主にVC系がいたら除外
-REQUIRE_OP_CF_NONNEG = True  # 収録期間内に営業CFの赤字がない
+# オーナー保有率とVC不在はマスト条件にしない(オーナーは「できれば」なので
+# WEIGHTSのowner_ratioで加点のみ、VCは除外せず一覧・通知に表示して人間が判断)
+MIN_OWNER_RATIO = 0.0    # 個人大株主の合計保有率(%)がこれ以上。0.0=無効
+EXCLUDE_VC = False       # 直近の大株主にVC系がいたら除外
+REQUIRE_OP_CF_NONNEG = True  # 収録期間内に営業CFの赤字なし
+
+# 「明らかに微妙な事業」の除外ワード(businessテーブルの事業内容全文への部分一致)。
+# 有報の長文に当てるので固有性の高い語だけ入れること(「金融」「不動産」の
+# ような広い語は本業でない銘柄まで巻き込む)。事業内容が未取得の銘柄は除外しない
+NG_BUSINESS_KEYWORDS = [
+    "パチンコ", "遊技機", "消費者金融",
+]
 
 # ---- スコアの重み(パーセンタイル0〜1に掛ける。合計は自動で正規化) ----
 WEIGHTS = {
@@ -117,11 +126,16 @@ def compute_metrics(fin_rows: List[Dict], holder_rows: List[Dict]) -> Optional[D
     rev = [r["revenue"] for r in actual]
     op = [r["op_income"] for r in actual]
 
-    # 希薄化: 株式数 ≒ 株主資本/BPS の変化率で近似
+    # 希薄化: 株式数 ≒ (株主資本 or 純資産)/BPS の変化率で近似。
+    # 1株当たり指標(BPS)は株式分割時に遡及修正されるので、発行済株式総数の
+    # 生値と違って分割を希薄化と誤認しにくい(shares_issuedは保存のみで未使用)。
+    # IR BANK由来の古い年度はBPSが分割遡及されない場合があり、その境界では
+    # 誤差が出る(既知の制約。分割イベントはJ-Quants導入時に扱う)
     shares = []
     for r in actual:
-        eq, bps = r["shareholders_equity"], r["bps"]
-        shares.append(eq / bps if eq and bps else None)
+        base = r.get("shareholders_equity") or r.get("net_assets")
+        bps = r.get("bps")
+        shares.append(base / bps if base and bps else None)
     share_pairs = [s for s in shares if s]
     dilution = (share_pairs[-1] / share_pairs[0] - 1.0) if len(share_pairs) >= 2 else None
 
@@ -162,6 +176,21 @@ def passes_hard_filter(m: Dict) -> bool:
     if REQUIRE_OP_CF_NONNEG and not m["op_cf_all_nonneg"]:
         return False
     return True
+
+
+def ng_business_keyword(description: Optional[str]) -> Optional[str]:
+    """事業内容がNGワードに当たれば最初のキーワードを返す(未取得はNoneで通す)。"""
+    if not description:
+        return None
+    return next((kw for kw in NG_BUSINESS_KEYWORDS if kw in description), None)
+
+
+def _snippet(text: Optional[str], limit: int = 120) -> Optional[str]:
+    """事業内容の冒頭を1行に潰して返す(一覧・通知カード表示用)。"""
+    if not text:
+        return None
+    flat = " ".join(text.split())
+    return flat[:limit] + ("…" if len(flat) > limit else "")
 
 
 def percentile_map(values: Dict[str, Optional[float]]) -> Dict[str, float]:
@@ -229,7 +258,20 @@ def run_screen(conn, top: int):
     pct["anti_dilution"] = percentile_map(
         {c: -m["dilution"] for c, m in metrics.items() if m["dilution"] is not None})
 
-    candidates = {c: m for c, m in metrics.items() if passes_hard_filter(m)}
+    # 事業内容(EDINET由来。未取り込みなら空でNG除外は発動しない)
+    businesses = {r["code"]: r["description"] for r in
+                  conn.execute("SELECT code, description FROM business")}
+
+    candidates = {}
+    ng_count = 0
+    for c, m in metrics.items():
+        if not passes_hard_filter(m):
+            continue
+        if ng_business_keyword(businesses.get(c)):
+            ng_count += 1
+            continue
+        m["business"] = _snippet(businesses.get(c))
+        candidates[c] = m
     scored = []
     for code, m in candidates.items():
         num = den = 0.0
@@ -252,8 +294,16 @@ def run_screen(conn, top: int):
                 (run_date, code, rank, round(score, 4), json.dumps(m, ensure_ascii=False)),
             )
 
+    conds = []
+    if MIN_OWNER_RATIO > 0:
+        conds.append(f"オーナー{MIN_OWNER_RATIO:g}%+")
+    if EXCLUDE_VC:
+        conds.append("VCなし")
+    if REQUIRE_OP_CF_NONNEG:
+        conds.append("営業CF赤字なし")
+    ng_note = f" / 事業内容NG {ng_count}社除外" if ng_count else ""
     print(f"対象 {len(metrics)}社 → ハードフィルタ通過 {len(scored)}社 "
-          f"(オーナー{MIN_OWNER_RATIO}%+ / VCなし / 営業CF赤字なし)\n")
+          f"({' / '.join(conds) or 'ハードフィルタなし'}{ng_note})\n")
     fmt = "{:<6} {:<20} {:>6} {:>7} {:>5} {:>7} {:>6} {:>7}  {}"
     print(fmt.format("code", "銘柄", "score", "CAGR", "連続", "CF率", "自己資", "希薄化", "オーナー"))
     for score, code, m in scored[:top]:
@@ -265,8 +315,11 @@ def run_screen(conn, top: int):
             f"{m['op_cf_margin']:.1f}%" if m["op_cf_margin"] is not None else "-",
             f"{m['equity_ratio']:.0f}%" if m["equity_ratio"] is not None else "-",
             f"{m['dilution'] * 100:+.1f}%" if m["dilution"] is not None else "-",
-            " ".join(m["owner_names"]) or "-",
+            (" ".join(m["owner_names"]) or "-")
+            + (f" [VC: {' '.join(m['vc_names'][:2])}]" if m["has_vc"] else ""),
         ))
+        if m.get("business"):
+            print(f"       └ {m['business'][:60]}")
     print(f"\n結果をscreen_results({run_date})に保存しました。通知: python -m src.notify")
 
 
