@@ -36,18 +36,22 @@ IR BANK版の取得(`src.fetch_irbank`)は業績予想と大株主の半期履�
 
 テスト: `.venv/bin/python -m unittest discover tests -v`
 
-### 日次運用(cron)
+### 日次運用(launchd)
 
-財務はEDINETの書類一覧で「新しく提出された有報だけ」を差分取得できるので数分で終わる:
+毎朝の「新着有報の差分取り込み → 大株主の鮮度維持 → スクリーニング → 1銘柄通知」は
+[scripts/daily.sh](scripts/daily.sh) にまとまっている(EDINETは差分取得なので数分で終わる)。
+macOSはスリープ中cronを取りこぼすので、launchdで毎朝7時に回す
+(7時に寝ていても次の起床時に実行される):
 
 ```bash
-# 毎朝: 新着有報の取り込み → 大株主の鮮度維持 → スクリーニング → 1銘柄通知
-.venv/bin/python -m src.fetch_jpx
-.venv/bin/python -m src.fetch_edinet --days 7
-.venv/bin/python -m src.fetch_irbank --stale-days 30 --limit 200   # 大株主ページのみ(財務はスキップされる)
-.venv/bin/python -m src.screen
-.venv/bin/python -m src.notify
+# 登録(~/Library/LaunchAgents/com.porukubodesu.kabu-screener.plist が daily.sh を毎朝7時に実行)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.porukubodesu.kabu-screener.plist
+launchctl bootout gui/$(id -u)/com.porukubodesu.kabu-screener   # 解除
+tail -f data/daily.log                                          # 実行ログ
 ```
+
+APIキーとLINEの認証情報はプロジェクトルートの `.env`(gitignore済み)に置く。
+daily.sh が実行時に読み込む。
 
 ### LINE通知
 
