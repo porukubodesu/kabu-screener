@@ -69,14 +69,17 @@ INT_FIELDS = {
 # 要素IDベースの対応(ラベルより優先)。親会社帰属の利益・持分はラベルの語順が
 # 発行者ごとに発散する(「当期利益又は当期損失(△):親会社の所有者に帰属」等)ため、
 # タクソノミで安定している要素IDの部分一致で拾う。field -> (含む, 除外)
+# revenueは、企業固有の拡張要素(例: トヨタの OperatingRevenuesIFRSKeyFinancialData)が
+# ラベル列を空で出してくるケースがあるため要素IDでも拾う
 ELEMENT_SPECS = {
+    "revenue": (("Revenue", "NetSales"), ("PerShare",)),
     "net_income": (("ProfitLossAttributableToOwnersOfParent",), ()),
     "net_assets": (("EquityAttributableToOwnersOfParent",), ("PerShare",)),
     "bps": (("EquityToEquityAttributableToOwnersOfParentPerShare",), ()),
 }
 
 # XBRLの純小数(0.585)を%表記(58.5)に揃えるフィールド
-# TODO: 実データで表記(純小数かどうか)を検証する(APIキー取得後)
+# (2026-08-22に7203/9983/130Aの実データで検証済み: 純小数で来るので100倍が正しい)
 RATIO_FIELDS = {"roe", "equity_ratio", "payout_ratio"}
 # 提出会社(個別)の値でも常に採用してよいフィールド(会社単位の指標)。
 # これ以外は、連結会社では個別値を捨てる(連結売上とスケールが合わないため)
@@ -151,7 +154,10 @@ def parse_financials(rows: List[Dict], period_end: str) -> List[Dict]:
             continue
         offset = int(m.group(2)) if m.group(2) else 0
         consolidated = m.group(4) is None
-        is_summary = "SummaryOfBusinessResults" in row["element"]
+        # 経営指標サマリーの要素は通常 SummaryOfBusinessResults を含むが、
+        # 企業固有の拡張要素は KeyFinancialData と名付けられることがある(トヨタ等)
+        is_summary = ("SummaryOfBusinessResults" in row["element"]
+                      or "KeyFinancialData" in row["element"])
         label = row["label"]
         # 1) 要素IDでの対応(サマリーのみ)。当たればキーワードより優先(rank=-1)
         field = rank = None

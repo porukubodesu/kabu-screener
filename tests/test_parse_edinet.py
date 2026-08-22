@@ -152,6 +152,12 @@ class TestConsolidatedIfrs(unittest.TestCase):
         self.assertEqual(fins[0]["revenue"], 1000)
         self.assertNotIn("op_income", fins[0])
 
+    def test_extension_element_with_empty_label(self):
+        # トヨタ実データ型: 連結売上が企業固有拡張要素(KeyFinancialData、ラベル空)
+        # でのみ出るケース。要素IDで拾え、単体の売上高(標準要素)に負けないこと
+        fins = self._parse(TOYOTA_CSV)
+        self.assertEqual(fins[0]["revenue"], 50684952000000)
+
     def test_nonconsolidated_filer_still_uses_parent_values(self):
         solo = CSV_HEADER + (
             '"jpcrp_cor:NetSalesSummaryOfBusinessResults"\t"売上高"\t'
@@ -212,6 +218,16 @@ MERGE_CSV = CSV_HEADER + (
     '"jpcrp_cor:ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults"\t'
     '"親会社株主に帰属する当期純利益"\t"CurrentYearDuration"\t"当期"\t"連結"\t'
     '"期間"\t"JPY"\t"円"\t"123456789"\r\n'
+)
+
+# トヨタ型: 連結売上が拡張要素(SummaryOfBusinessResultsでなくKeyFinancialData、
+# ラベル列は空)でタグ付けされ、標準要素の売上高は単体のみのケース
+TOYOTA_CSV = CSV_HEADER + (
+    '"jpcrp030000-asr_E00001-000:OperatingRevenuesIFRSKeyFinancialData"\t""\t'
+    '"CurrentYearDuration"\t"当期"\t"その他"\t"期間"\t"JPY"\t"円"\t"50684952000000"\r\n'
+    '"jpcrp_cor:NetSalesSummaryOfBusinessResults"\t"売上高、経営指標等"\t'
+    '"CurrentYearDuration_NonConsolidatedMember"\t"当期"\t"その他"\t"期間"\t"JPY"\t'
+    '"円"\t"18259979000000"\r\n'
 )
 
 # 連結IFRS銘柄: 非支配持分込みの当期利益と親会社帰属(ラベルは語順の異なる表記)が

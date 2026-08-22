@@ -127,10 +127,11 @@ def compute_metrics(fin_rows: List[Dict], holder_rows: List[Dict]) -> Optional[D
     op = [r["op_income"] for r in actual]
 
     # 希薄化: 株式数 ≒ (株主資本 or 純資産)/BPS の変化率で近似。
-    # 1株当たり指標(BPS)は株式分割時に遡及修正されるので、発行済株式総数の
+    # 1株当たり指標(BPS)は株式分割時に遡及修正されることが多く、発行済株式総数の
     # 生値と違って分割を希薄化と誤認しにくい(shares_issuedは保存のみで未使用)。
-    # IR BANK由来の古い年度はBPSが分割遡及されない場合があり、その境界では
-    # 誤差が出る(既知の制約。分割イベントはJ-Quants導入時に扱う)
+    # ただし有報サマリーは分割を「実施期の翌期首起点」で仮定計算するため、
+    # 最古年度(4期前)は未修正のことがある(9983の2021/08で実測)。IR BANK由来の
+    # 古い年度との境界も同様(既知の制約。分割イベントはJ-Quants導入時に扱う)
     shares = []
     for r in actual:
         base = r.get("shareholders_equity") or r.get("net_assets")
