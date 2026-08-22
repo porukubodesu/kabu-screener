@@ -13,16 +13,19 @@
 | データ | ソース | 備考 |
 |---|---|---|
 | 上場銘柄マスタ | JPX公表 `data_j.xls` | プライム/スタンダード/グロース内国株式のみ(約3,700社) |
-| 財務(業績/財務/CF/配当) | IR BANK `fy-data-all.csv`(公式配布) | 直近4〜5年分 |
-| 大株主(半期スナップショット履歴) | IR BANK `/{code}/holder` | 有報・大量保有由来 |
+| 財務(業績/財務/CF/配当) | EDINET API(有報の主要な経営指標) | 5期分。営業利益のみPL本体から2期分補完 |
+| 大株主(当期末の上位10名) | EDINET API(有報の大株主の状況) | 過去履歴はIR BANK由来分があれば併存 |
+| (補完) 財務・大株主履歴 | IR BANK(公式配布CSV / holderページ) | EDINETで取れないものだけ任意で |
 
-IR BANKは個人運営サイトなので、リクエスト間1.5秒スリープ+連絡先入りUAでアクセスする(fetch_irbank.pyに実装済み。変更しないこと)。
+- **EDINET API** は金融庁の公式API。無料のAPIキーを https://api.edinet-fsa.go.jp で登録し、`EDINET_API_KEY` 環境変数で渡す。公式とはいえ0.5秒間隔の礼儀は守る(初回全社でも2時間弱)
+- **IR BANK** は個人運営サイトなので、CSV12秒/HTML3秒間隔+連絡先入りUAでアクセスする(fetch_irbank.pyに実装済み。変更しないこと)
 
 ## 使い方
 
 ```bash
+export EDINET_API_KEY=...                         # 0. EDINETのAPIキー(無料登録)
 .venv/bin/python -m src.fetch_jpx                 # 1. 銘柄マスタ更新
-.venv/bin/python -m src.fetch_irbank              # 2. 財務+大株主を取得(初回は数時間)
+.venv/bin/python -m src.fetch_edinet              # 2. 有報から財務+大株主を取得(初回〜2時間)
 .venv/bin/python -m src.screen --stats            # 3. 指標の分布を見る(基準の感触を掴む)
 .venv/bin/python -m src.screen                    # 4. スクリーニング実行(結果はDBにも保存)
 .venv/bin/python -m src.notify                    # 5. 今日の1銘柄を通知(LINE or 標準出力)
@@ -32,12 +35,12 @@ IR BANKは個人運営サイトなので、リクエスト間1.5秒スリープ+
 
 ### 日次運用(cron)
 
-初回取得後は、鮮度維持のローリング更新で十分:
+初回取得後の日次実行は差分だけで軽い(書類一覧の未走査日+新しく提出された有報のみ):
 
 ```bash
-# 毎朝: 30日より古い銘柄を200社ずつ再取得 → スクリーニング → 1銘柄通知
+# 毎朝: 新着の有報を取り込み → スクリーニング → 1銘柄通知
 .venv/bin/python -m src.fetch_jpx
-.venv/bin/python -m src.fetch_irbank --stale-days 30 --limit 200
+.venv/bin/python -m src.fetch_edinet
 .venv/bin/python -m src.screen
 .venv/bin/python -m src.notify
 ```
@@ -61,7 +64,8 @@ export LINE_USER_ID=...                # 自分のユーザーID
 
 ## 既知の制約とロードマップ
 
-- **財務が直近4〜5年分**(IR BANK無料CSVの範囲)。「5期連続」の厳密判定には1年足りない → EDINET API(要無料APIキー登録)に移行すれば有報の5年サマリーで解消
+- **営業利益は2期分のみ**(有報の主要指標に含まれず、PL本体から当期・前期を補完)。増益ストリークは営業利益が足りない場合、経常利益→純利益の順で代用する(screen.py)
+- **要素IDのカバレッジは実データで要検証**。会計基準・業種でXBRLタグが分かれるため候補リスト(parse_edinet.py)で吸収しているが、初回取り込み後に `fetch_log` の no_data / error を確認して候補を足す
 - **時価総額・株価なし** → J-Quants(要無料アカウント)を足す。無料プランは12週遅延だが年次スクリーニングには影響なし
-- **オーナー判定は名前ベースのヒューリスティック**(法人マーカーに当たらなければ個人とみなす)。役員名簿との突き合わせはEDINET移行時に
-- **大量保有報告書の著名人ウォッチ**(イベント駆動通知)は未実装 → EDINET APIで実装予定
+- **オーナー判定は名前ベースのヒューリスティック**(法人マーカーに当たらなければ個人とみなす)。有報の役員の状況との突き合わせは未実装
+- **大量保有報告書の著名人ウォッチ**(イベント駆動通知)は未実装 → 同じEDINET APIの書類一覧(docTypeCode=350)で実装予定

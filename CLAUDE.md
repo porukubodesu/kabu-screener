@@ -2,31 +2,30 @@
 
 自分用の株スクリーニングツール。設計方針・データソース・使い方は [README.md](README.md) が正本 (このファイルは作業状態のメモ)。
 
-## 現在地 (2026-07-04 時点)
+## 現在地 (2026-08-22 時点)
 
-**初回バックフィルの途中で停止している。**
+**EDINET API 移行を実装済み。初回取得はまだ (APIキー待ち)。**
 
-- 銘柄マスタ: 3,734社 取得済み (`companies`)
-- 財務データ: **53社のみ** (`financials`) — 残り約3,680社が未取得
-- 停止理由: IR BANK の表示制限 (`csv blocked`) に繰り返し当たり、30分待機ループのまま終了 (`data/backfill.log` 参照)
+- IR BANK 経由の初回バックフィルはレート制限で 53/3,734社 で停止したまま → 方針転換し、財務+大株主は EDINET API (金融庁公式) から取る `fetch_edinet` を実装した
+- 実装は合成データのユニットテストのみで検証済み。**実際の EDINET API・実データではまだ動かしていない**
 
 ## 次のタスク
 
-1. IR BANK のレート制限に当たらないペースで初回取得を完走させる
-   - 現状の 1.5秒スリープでも制限に当たった実績あり → 間隔を伸ばす / `--limit` で1日分を絞って数日かけて埋める、のどちらかから検討
-   - `--stale-days` / `--limit` オプションは `fetch_irbank` に実装済み
-2. 完走後は README の「日次運用 (cron)」セクションの通りローリング更新に移行
-3. ロードマップ (EDINET API 移行、J-Quants で時価総額、大量保有ウォッチ) は README 末尾参照
+1. https://api.edinet-fsa.go.jp で API キーを無料登録し `EDINET_API_KEY` に設定 (どこにも記録が無いことは確認済み。未登録のはず)
+2. まず小さく実データ検証: `fetch_edinet --limit 20` → sqlite で financials / holders の中身と `fetch_log` の no_data / error を目視
+   - XBRL の要素IDが会計基準・業種で分かれるため、候補リスト (`parse_edinet.py` の `SUMMARY_ELEMENTS`) に漏れがあれば足す。生ZIPは `data/raw_edinet/` に残るので再ダウンロード不要で試行錯誤できる
+3. 問題なければ全社取り込み (`fetch_edinet`、0.5秒間隔で2時間弱) → `screen --stats` で分布確認 → README の日次運用 (cron) へ
+4. 残ロードマップ (J-Quants で時価総額、大量保有ウォッチ、役員名簿突き合わせ) は README 末尾参照
 
 ## 守ること
 
-- **IR BANK は個人運営サイト**。`fetch_irbank.py` のアクセスマナー (スリープ + 連絡先入りUA) は変更しない (README にも明記)
-- 制限回避のための偽装 (UA偽装・並列化・プロキシ) はしない。ペースを落とす方向でのみ調整する
+- **EDINET は公式APIだが節度を守る**。既定0.5秒間隔より詰めない
+- **IR BANK は個人運営サイト** (補完用に残置)。`fetch_irbank.py` のアクセスマナー (スリープ + 連絡先入りUA) は変更しない。制限回避のための偽装 (UA偽装・並列化・プロキシ) はしない
 
 ## コマンド
 
 ```bash
 .venv/bin/python -m unittest discover tests -v   # テスト
-.venv/bin/python -m src.fetch_irbank --help      # 取得オプション確認
+.venv/bin/python -m src.fetch_edinet --help      # EDINET取得オプション確認
 sqlite3 data/screener.db                         # DB確認
 ```

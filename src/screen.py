@@ -115,11 +115,21 @@ def compute_metrics(fin_rows: List[Dict], holder_rows: List[Dict]) -> Optional[D
         return None
     years = [r["fiscal_year"] for r in actual]
     rev = [r["revenue"] for r in actual]
-    op = [r["op_income"] for r in actual]
 
-    # 希薄化: 株式数 ≒ 株主資本/BPS の変化率で近似
+    # 増益ストリーク用の利益系列: 営業利益を優先し、2期未満なら経常→純利益で代用
+    # (EDINET有報の主要指標には営業利益がなく、PL本体から2期分しか補完できないため)
+    op = [r["op_income"] for r in actual]
+    for fallback in ("ordinary_income", "net_income"):
+        if sum(v is not None for v in op) >= 2:
+            break
+        op = [r[fallback] for r in actual]
+
+    # 希薄化: 発行済株式総数(EDINET)があればそれを、なければ株主資本/BPSで近似
     shares = []
     for r in actual:
+        if r.get("shares_issued"):
+            shares.append(r["shares_issued"])
+            continue
         eq, bps = r["shareholders_equity"], r["bps"]
         shares.append(eq / bps if eq and bps else None)
     share_pairs = [s for s in shares if s]

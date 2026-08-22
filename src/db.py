@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     status     TEXT NOT NULL        -- 'ok' / 'no_data' / 'error:...'
 );
 
+CREATE TABLE IF NOT EXISTS edinet_docs (
+    doc_id       TEXT PRIMARY KEY,   -- 'S100XXXX'
+    code         TEXT NOT NULL,      -- 証券コード4桁('7203', '130A')
+    edinet_code  TEXT,
+    filer_name   TEXT,
+    doc_type     TEXT NOT NULL,      -- '120'=有価証券報告書
+    period_end   TEXT,               -- 'YYYY-MM-DD'
+    submitted_at TEXT NOT NULL,
+    ingested_at  TEXT                -- 取り込み済みならISO日時
+);
+
+CREATE TABLE IF NOT EXISTS edinet_index_log (
+    list_date  TEXT PRIMARY KEY,     -- 'YYYY-MM-DD'(書類一覧APIを走査済みの日付)
+    indexed_at TEXT NOT NULL,
+    doc_count  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS screen_results (
     run_date     TEXT NOT NULL,     -- 'YYYY-MM-DD'
     code         TEXT NOT NULL,
@@ -76,9 +93,20 @@ CREATE INDEX IF NOT EXISTS idx_financials_code ON financials(code);
 """
 
 
+# 既存DBへの後付け列(CREATE TABLE IF NOT EXISTSでは追加されないため)
+MIGRATIONS = [
+    "ALTER TABLE financials ADD COLUMN shares_issued INTEGER",  # 発行済株式総数(EDINET)
+]
+
+
 def get_conn(db_path=DB_PATH):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    for stmt in MIGRATIONS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # 適用済み
     return conn
