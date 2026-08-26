@@ -8,6 +8,7 @@ set -a; source .env 2>/dev/null; set +a
 export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 PY=.venv/bin/python
 LOG=data/daily.log
+mkdir -p data  # 初回チェックアウト時はdata/が無く、ログのリダイレクトに先に失敗する
 
 {
   echo "===== daily run $(date '+%Y-%m-%d %H:%M:%S') ====="
