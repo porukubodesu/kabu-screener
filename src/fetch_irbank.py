@@ -182,8 +182,12 @@ def main():
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
 
-    est_h = len(targets) * (args.csv_sleep + args.sleep + 1) / 3600
-    print(f"{len(targets)}社を取得します(csv間隔{args.csv_sleep}s、推定{est_h:.1f}時間+制限待ち)", flush=True)
+    # EDINET取り込み済みの銘柄は財務CSVをスキップする(ループ内参照)ので、
+    # CSVの重い間隔(190s)はスキップされない銘柄数にだけ掛けて見積もる
+    n_csv = sum(1 for c in targets if not has_edinet_financials(conn, c))
+    est_h = (n_csv * args.csv_sleep + len(targets) * (args.sleep + 1)) / 3600
+    print(f"{len(targets)}社を取得します(うち財務CSVあり{n_csv}社、"
+          f"csv間隔{args.csv_sleep}s、推定{est_h:.1f}時間+制限待ち)", flush=True)
 
     ok = no_data = errors = 0
     blocked_streak = 0

@@ -4,6 +4,8 @@
 # 1ステップ失敗しても後続は実行する(取得が転けてもスクリーニング・通知は手元のDBで動く)
 cd "$(dirname "$0")/.." || exit 1
 set -a; source .env 2>/dev/null; set +a
+# launchdのPATHは最小構成でgh等が見えないため明示的に足す
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 PY=.venv/bin/python
 LOG=data/daily.log
 
@@ -14,5 +16,17 @@ LOG=data/daily.log
   $PY -m src.fetch_irbank --stale-days 30 --limit 200
   $PY -m src.screen
   $PY -m src.notify
+  # サイト公開: レポートを生成し、単一コミットの site ブランチとして強制push
+  # (masterの履歴を日次コミットで汚さないためのplumbing方式)
+  $PY -m src.report
+  if [ -f data/site/index.html ]; then
+    BLOB=$(git hash-object -w data/site/index.html)
+    TREE=$(printf '100644 blob %s\tindex.html\n' "$BLOB" | git mktree)
+    COMMIT=$(git commit-tree "$TREE" -m "site: $(date '+%Y-%m-%d')")
+    git branch -f site "$COMMIT"
+    # launchd環境ではosxkeychainが効かないことがあるためghを直指定
+    git -c credential.helper='!/usr/local/bin/gh auth git-credential' \
+        push -f origin site
+  fi
   echo "===== done $(date '+%Y-%m-%d %H:%M:%S') ====="
 } >> "$LOG" 2>&1

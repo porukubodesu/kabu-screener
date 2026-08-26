@@ -27,8 +27,16 @@ financialsは3,692社が `source='edinet'`、事業内容 (business) は3,691社
 
 ## 次のタスク
 
-1. cron移行 (README「日次運用」参照)。以降IR BANKは大株主の鮮度維持+業績予想のみ
+1. (任意) LINE通知の有効化 (.envにトークン2行)。結果ページがあるので優先度低
 2. (任意・ロードマップ) J-Quants導入: 時価総額・株価・分割イベント
+
+## 運用メモ
+
+- 日次はlaunchd (毎朝7時、`scripts/daily.sh`)。plistは
+  `~/Library/LaunchAgents/com.porukubodesu.kabu-screener.plist`
+- 結果ページ: https://porukubodesu.github.io/kabu-screener/
+  (`src.report` が生成 → 単一コミットの `site` ブランチに強制push。
+  リポジトリは2026-08-22にpublic化済み、APIキーの履歴非混入は確認済み)
 
 ## 守ること
 

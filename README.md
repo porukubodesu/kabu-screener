@@ -30,6 +30,7 @@ IR BANKは個人運営サイトなので、リクエスト間スリープ+連絡
 .venv/bin/python -m src.screen --stats            # 3. 指標の分布を見る(基準の感触を掴む)
 .venv/bin/python -m src.screen                    # 4. スクリーニング実行(結果はDBにも保存)
 .venv/bin/python -m src.notify                    # 5. 今日の1銘柄を通知(LINE or 標準出力)
+.venv/bin/python -m src.report                    # 6. 結果ページ生成(data/site/index.html)
 ```
 
 IR BANK版の取得(`src.fetch_irbank`)は業績予想と大株主の半期履歴の補完用。EDINET取り込み済みの銘柄では財務CSVを自動でスキップする。
@@ -52,6 +53,15 @@ tail -f data/daily.log                                          # 実行ログ
 
 APIキーとLINEの認証情報はプロジェクトルートの `.env`(gitignore済み)に置く。
 daily.sh が実行時に読み込む。
+
+### 結果ページ(GitHub Pages)
+
+日次実行の最後に `src.report` が静的HTML(上位50+スコアバー+事業内容)を生成し、
+**単一コミットの `site` ブランチに強制push**して公開する(masterは汚さない):
+
+**https://porukubodesu.github.io/kabu-screener/**
+
+LINE通知は任意(未設定ならログ出力のみ)。ページがあれば実質不要。
 
 ### LINE通知
 
