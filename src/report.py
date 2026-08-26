@@ -10,6 +10,7 @@ daily.sh がこれを site ブランチに載せてGitHub Pagesで公開する�
 import argparse
 import html
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -224,7 +225,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=50)
     args = ap.parse_args()
-    generate(get_conn(), args.top)
+    # 生成できなかったら非ゼロ終了(daily.shが古いページを再公開しないためのゲート)
+    if generate(get_conn(), args.top) is None:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
