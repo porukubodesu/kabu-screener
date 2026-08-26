@@ -4,6 +4,8 @@ import sqlite3
 import tempfile
 import unittest
 import zipfile
+
+import requests
 from datetime import date
 from pathlib import Path
 from unittest import mock
@@ -200,6 +202,17 @@ class TestApiErrorDetection(unittest.TestCase):
         with mock.patch.object(fetch_edinet, "_get", return_value=fake):
             with self.assertRaises(fetch_edinet.ApiError):
                 fetch_edinet.list_documents(None, date(2026, 7, 1), "key", 0)
+
+    def test_request_errors_redact_api_key(self):
+        # 通信エラーの例外文字列はキー入りURLを含む。daily.logに出るため伏せること
+        err = requests.exceptions.ConnectionError(
+            "pool: /api/v2/documents.json?Subscription-Key=SECRET123&type=2 failed")
+        session = mock.Mock()
+        session.get.side_effect = err
+        with self.assertRaises(RuntimeError) as cm:
+            fetch_edinet._get(session, "https://api/documents.json", {}, 0)
+        self.assertNotIn("SECRET123", str(cm.exception))
+        self.assertIn("Subscription-Key=***", str(cm.exception))
 
     def test_doc_fetch_404_json_returns_none(self):
         fake = mock.Mock(content=b'{"StatusCode": 404,"message": "Not Found"}')

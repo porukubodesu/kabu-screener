@@ -20,6 +20,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -56,6 +57,15 @@ class ApiError(Exception):
     """EDINET APIのエラー応答。認証エラー等はHTTP 200のJSONで返るので明示検知する。"""
 
 
+# requests例外の文字列には Subscription-Key 入りの完全URLが含まれるため、
+# ログ・端末に出す前に必ずキーを伏せる
+_KEY_RE = re.compile(r"(Subscription-Key=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def _redacted(err: object) -> str:
+    return _KEY_RE.sub(r"\1***", str(err))
+
+
 def _get(session: requests.Session, url: str, params: Dict, sleep: float,
          timeout: int = 60) -> Optional[requests.Response]:
     """5xx/接続エラーは2回リトライ。404はNone。"""
@@ -72,9 +82,11 @@ def _get(session: requests.Session, url: str, params: Dict, sleep: float,
         if resp.status_code >= 500 or resp.status_code == 429:
             last_err = RuntimeError(f"HTTP {resp.status_code}")
             continue
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # raise_for_status()の例外はキー入りURLを含むため使わない
+            raise RuntimeError(f"HTTP {resp.status_code}: {url}")
         return resp
-    raise RuntimeError(f"fetch failed after retries: {url} ({last_err})")
+    raise RuntimeError(f"fetch failed after retries: {url} ({_redacted(last_err)})")
 
 
 def list_documents(session, day: date, api_key: str, sleep: float) -> List[Dict]:
