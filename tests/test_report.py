@@ -30,10 +30,13 @@ def _seed(conn):
                  " 3848098000000, 5472920000000, 1000000000000, 1000)")
     conn.execute("INSERT INTO financials(code, fiscal_year, source, revenue, op_income)"
                  " VALUES ('7203','2025/03','edinet', 480367000000, 47955000000)")
+    conn.execute("INSERT INTO financials(code, fiscal_year, source, revenue)"
+                 " VALUES ('7203','2024/03','edinet', 400000000000)")
     conn.execute("INSERT INTO financials(code, fiscal_year, is_forecast, source, revenue)"
                  " VALUES ('7203','2027/03', 1, 'irbank', 52000000000000)")
     conn.execute("INSERT INTO business VALUES ('7203', '3 【事業の内容】自動車事業を中心に'"
-                 " || '<試験>ロングテキスト' , '2026-03-31', '2026-08-22')")
+                 " || '<試験>ロングテキスト。自社ブランドの商品を企画並びに販売。Z世代向け。'"
+                 " , '2026-03-31', '2026-08-22')")
     # 7203はmktcap無し(推定計算のフォールバック)、9984は公式mktcapあり
     conn.execute("INSERT INTO prices VALUES ('7203', '2026-08-27', 3000.0, NULL, '2026-08-28T07:00:00')")
     conn.execute("INSERT INTO prices VALUES ('9984', '2026-08-27', 100.0, 4500000000000.0, '2026-08-28T07:00:00')")
@@ -97,10 +100,11 @@ class TestReport(unittest.TestCase):
         self.assertIn('class="spark"', self.html)  # 実績2期以上でミニバー
 
     def test_sector_tabs_and_cards(self):
-        self.assertIn('data-sector="輸送用機器"', self.html)   # タブ+カードの両方
+        self.assertIn('data-tag="輸送用機器"', self.html)    # タブ
+        self.assertIn('data-tags="輸送用機器"', self.html)   # カード
         self.assertIn("全て", self.html)
         # sector33が無い銘柄はmarketで代替
-        self.assertIn('data-sector="プライム"', self.html)
+        self.assertIn('data-tags="プライム"', self.html)
         # カード型: クリック無しで決算・事業・大株主が最初から見える(hidden無し)
         self.assertIn('<article class="card"', self.html)
         self.assertNotIn("hidden", self.html.split("<article")[1].split("</article>")[0])
@@ -127,6 +131,52 @@ class TestReport(unittest.TestCase):
     def test_empty_results_returns_none(self):
         conn = get_conn(":memory:")
         self.assertIsNone(report.generate(conn, top=100))
+
+
+class TestThemes(unittest.TestCase):
+    """教師データ(バイセル/パワーエックス/yutori型)と除外対象の分類テスト。"""
+
+    def test_own_product_and_themes(self):
+        from src.themes import MODEL_OWN, classify_model, match_themes
+        buysell = "総合リユースサービスを提供。出張訪問買取事業と店舗買取事業。自社運営の販路。"
+        self.assertEqual(classify_model(buysell), MODEL_OWN)
+        self.assertIn("リユース・二次流通", match_themes(buysell))
+        powerx = "蓄電池の開発、製造、販売から運用まで一貫して提供。エネルギー自給率の向上。"
+        self.assertEqual(classify_model(powerx), MODEL_OWN)
+        self.assertIn("エネルギー転換", match_themes(powerx))
+        yutori = "自社ブランドの衣料品の企画並びに販売。Z世代を対象としたブランド運営。"
+        self.assertEqual(classify_model(yutori), MODEL_OWN)
+        self.assertIn("Z世代・新消費", match_themes(yutori))
+
+    def test_contracted_and_real_estate_excluded(self):
+        from src.themes import (MODEL_CONTRACTED, MODEL_REAL_ESTATE,
+                                classify_model)
+        consult = "コンサルティングサービスを提供し、システム開発の業務を受託しております。"
+        self.assertEqual(classify_model(consult), MODEL_CONTRACTED)
+        estate = "不動産の売買、不動産仲介および分譲マンションの開発を行う。"
+        self.assertEqual(classify_model(estate), MODEL_REAL_ESTATE)
+
+    def test_weak_signal_stays_other(self):
+        from src.themes import MODEL_OTHER, classify_model, match_themes
+        plain = "各種製品の製造販売を行っております。"
+        self.assertEqual(classify_model(plain), MODEL_OTHER)  # 誤除外しない
+        self.assertEqual(match_themes(plain), [])
+
+
+class TestDiscover(unittest.TestCase):
+    def test_discover_page(self):
+        from src import discover
+        conn = get_conn(":memory:")
+        _seed(conn)
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(discover, "SITE_DIR", Path(td)):
+            out = discover.generate(conn, top=50)
+            text = out.read_text(encoding="utf-8")
+        # 3期以上の財務+自社ブランド+Z世代テーマを持つ7203が載る
+        self.assertIn("発見機②", text)
+        self.assertIn("トヨタ自動車", text)
+        self.assertIn("Z世代・新消費", text)
+        self.assertIn("CF赤字許容", text)
 
 
 class TestBackfillMarker(unittest.TestCase):

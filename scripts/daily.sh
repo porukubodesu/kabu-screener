@@ -18,12 +18,14 @@ mkdir -p data  # 初回チェックアウト時はdata/が無く、ログのリ�
   $PY -m src.screen
   $PY -m src.fetch_prices
   $PY -m src.notify
-  # サイト公開: レポートを生成し、単一コミットの site ブランチとして強制push
-  # (masterの履歴を日次コミットで汚さないためのplumbing方式)。
-  # 生成が失敗したら古いindex.htmlを再公開しないようpushしない
-  if $PY -m src.report; then
-    BLOB=$(git hash-object -w data/site/index.html)
-    TREE=$(printf '100644 blob %s\tindex.html\n' "$BLOB" | git mktree)
+  # サイト公開: 2ページ(発見機①②)を生成し、単一コミットの site ブランチとして
+  # 強制push (masterの履歴を日次コミットで汚さないためのplumbing方式)。
+  # 生成が失敗したら古いページを再公開しないようpushしない
+  if $PY -m src.report && $PY -m src.discover; then
+    B1=$(git hash-object -w data/site/index.html)
+    B2=$(git hash-object -w data/site/discover.html)
+    TREE=$(printf '100644 blob %s\tindex.html\n100644 blob %s\tdiscover.html\n' \
+                  "$B1" "$B2" | git mktree)
     COMMIT=$(git commit-tree "$TREE" -m "site: $(date '+%Y-%m-%d')")
     git branch -f site "$COMMIT"
     # launchd環境ではosxkeychainが効かないことがあるためghを直指定
