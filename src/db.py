@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS prices (
     fetched_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS bars_backfill (
+    code    TEXT PRIMARY KEY,   -- 日足2年バックフィル済みの銘柄(新規上場の再取得防止)
+    done_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS price_bars (
     code  TEXT NOT NULL,
     date  TEXT NOT NULL,           -- 'YYYY-MM-DD'

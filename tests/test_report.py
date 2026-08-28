@@ -129,6 +129,25 @@ class TestReport(unittest.TestCase):
         self.assertIsNone(report.generate(conn, top=100))
 
 
+class TestBackfillMarker(unittest.TestCase):
+    def test_recent_ipo_not_refetched(self):
+        # 新規上場銘柄(履歴が2年に届かない)でも、一度バックフィルしたら再取得しない
+        from datetime import date
+        from src import fetch_prices
+        conn = get_conn(":memory:")
+        conn.execute("INSERT INTO screen_results VALUES ('2026-08-28','130A',1,0.9,'{}',NULL)")
+        calls = []
+        with mock.patch.object(fetch_prices, "fetch_code_bars",
+                               side_effect=lambda *a: calls.append(a) or
+                               [("2026-05-01", 1, 2, 0.5, 1.5)]), \
+                mock.patch.object(fetch_prices.time, "sleep"):
+            fetch_prices.backfill_bars(conn, None, "key", date(2026, 6, 5), top=300)
+            fetch_prices.backfill_bars(conn, None, "key", date(2026, 6, 5), top=300)
+        self.assertEqual(len(calls), 1)   # 2回目はマーカーでスキップ
+        row = conn.execute("SELECT * FROM price_bars WHERE code='130A'").fetchone()
+        self.assertEqual(row["date"], "2026-05-01")
+
+
 class TestJquantsHelpers(unittest.TestCase):
     def test_code_mapping(self):
         # J-Quantsは5桁コード(4桁+0)。英字入りコードも同じ規則

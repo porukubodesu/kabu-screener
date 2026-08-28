@@ -129,10 +129,10 @@ def backfill_bars(conn, session, api_key: str, latest: date, top: int) -> None:
     ここに来るのは表示上位に新しく入った銘柄などの初回だけ。無料プランの
     レート制限が厳しいため、間隔を空けて淡々と回す(429は待って再試行)。
     """
-    horizon = (latest - timedelta(days=365 * 2 - 45)).isoformat()
-    codes = [c for c in target_codes(conn, top)
-             if (conn.execute("SELECT MIN(date) FROM price_bars WHERE code = ?",
-                              (c,)).fetchone()[0] or "9999") > horizon]
+    # 完了マーカーの無い銘柄だけ対象にする。MIN(date)では新規上場銘柄
+    # (履歴が2年に届かない)を「未取得」と誤判定し、毎日再取得してしまう
+    done = {r["code"] for r in conn.execute("SELECT code FROM bars_backfill")}
+    codes = [c for c in target_codes(conn, top) if c not in done]
     fetched = 0
     for code in codes:
         try:
@@ -146,6 +146,9 @@ def backfill_bars(conn, session, api_key: str, latest: date, top: int) -> None:
                 "INSERT OR REPLACE INTO price_bars(code, date, open, high, low, close)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
                 [(code, d, o, h, l, c) for d, o, h, l, c in bars])
+            conn.execute(
+                "INSERT OR REPLACE INTO bars_backfill(code, done_at) VALUES (?, ?)",
+                (code, datetime.now().isoformat(timespec="seconds")))
         fetched += 1
         time.sleep(BACKFILL_SLEEP)
     print(f"日足バックフィル: {fetched}/{len(codes)}銘柄")
