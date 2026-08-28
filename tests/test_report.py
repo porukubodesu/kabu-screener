@@ -23,7 +23,12 @@ def _seed(conn):
                  (json.dumps(m1, ensure_ascii=False),))
     conn.execute("INSERT INTO screen_results VALUES ('2026-08-22','9984',2,0.5,?,NULL)",
                  (json.dumps(m2, ensure_ascii=False),))
-    conn.execute("INSERT INTO financials(code, fiscal_year, source) VALUES ('7203','2026/03','edinet')")
+    conn.execute("INSERT INTO financials(code, fiscal_year, source, revenue, op_income, net_income, op_cf)"
+                 " VALUES ('7203','2026/03','edinet', 50684952000000, 3766216000000, 3848098000000, 5472920000000)")
+    conn.execute("INSERT INTO financials(code, fiscal_year, source, revenue, op_income)"
+                 " VALUES ('7203','2025/03','edinet', 480367000000, 47955000000)")
+    conn.execute("INSERT INTO financials(code, fiscal_year, is_forecast, source, revenue)"
+                 " VALUES ('7203','2027/03', 1, 'irbank', 52000000000000)")
 
 
 class TestReport(unittest.TestCase):
@@ -57,6 +62,18 @@ class TestReport(unittest.TestCase):
     def test_split_artifact_flagged_and_vc_chip(self):
         self.assertIn("分割?", self.html)   # dilution +210% には注記
         self.assertIn(">VC</span>", self.html)
+
+    def test_logic_box_reflects_screen_constants(self):
+        self.assertIn("ロジック", self.html)
+        self.assertIn("営業CFの赤字なし", self.html)      # 有効なハードフィルタ
+        self.assertIn("売上CAGR 30%", self.html)          # WEIGHTSから動的生成
+        self.assertIn("パチンコ", self.html)              # NGワード一覧
+
+    def test_fin_details_table(self):
+        self.assertIn("決算推移", self.html)
+        self.assertIn("50.68兆", self.html)   # 兆表記
+        self.assertIn("4,804億", self.html)   # 億表記
+        self.assertIn("2027/03(予)", self.html)  # 予想行のマーク
 
     def test_empty_results_returns_none(self):
         conn = get_conn(":memory:")
