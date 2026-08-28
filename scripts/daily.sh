@@ -16,6 +16,7 @@ mkdir -p data  # 初回チェックアウト時はdata/が無く、ログのリ�
   $PY -m src.fetch_edinet --days 7
   $PY -m src.fetch_irbank --stale-days 30 --limit 200
   $PY -m src.screen
+  $PY -m src.fetch_prices
   $PY -m src.notify
   # サイト公開: レポートを生成し、単一コミットの site ブランチとして強制push
   # (masterの履歴を日次コミットで汚さないためのplumbing方式)。

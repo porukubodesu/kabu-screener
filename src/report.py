@@ -1,11 +1,18 @@
 """スクリーニング結果の静的HTMLレポートを生成する。
 
-data/site/index.html に自己完結のページ(外部アセットなし)を書き出す。
+data/site/index.html に自己完結のページを書き出す(CSS/JSインライン)。
 daily.sh がこれを site ブランチに載せてGitHub Pagesで公開する。
+
+構成:
+- ロジック説明(screen.pyの定数から動的生成)
+- 業種タブ(クリックで絞り込み)
+- 一覧: スコア・時価総額(J-Quants終値×推定株式数の概算)・直近業績・指標
+- 行クリックで詳細パネル: 事業内容全文スニペット・決算推移(表+バー)・大株主・
+  月足チャート(TradingView埋め込み、クリック時のみロード)
 
 使い方:
   .venv/bin/python -m src.report            # 最新のscreen_resultsから生成
-  .venv/bin/python -m src.report --top 50
+  .venv/bin/python -m src.report --top 100
 """
 import argparse
 import html
@@ -17,9 +24,10 @@ from typing import Dict, Optional
 
 from .db import DATA_DIR, get_conn
 from .screen import (EXCLUDE_VC, MIN_OWNER_RATIO, NG_BUSINESS_KEYWORDS,
-                     REQUIRE_OP_CF_NONNEG, WEIGHTS)
+                     REQUIRE_OP_CF_NONNEG, WEIGHTS, _snippet)
 
 SITE_DIR = DATA_DIR / "site"
+COLS = 11  # 一覧の列数(詳細パネルのcolspan)
 
 WEIGHT_LABELS = {
     "rev_cagr": "売上CAGR", "consec_growth": "連続増収増益",
@@ -34,7 +42,7 @@ CSS = """
   --page: #f9f9f7; --surface: #fcfcfb;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
-  --bar: #2a78d6; --bar-track: #f0efec;
+  --bar: #2a78d6; --bar-track: #f0efec; --wash: rgba(11,11,11,0.04);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -42,7 +50,7 @@ CSS = """
     --page: #0d0d0d; --surface: #1a1a19;
     --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --bar: #3987e5; --bar-track: #383835;
+    --bar: #3987e5; --bar-track: #383835; --wash: rgba(255,255,255,0.05);
   }
 }
 * { box-sizing: border-box; }
@@ -51,68 +59,120 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px; line-height: 1.6;
 }
-.wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+.wrap { max-width: 1160px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
 header h1 { font-size: 20px; margin: 0; }
-header .sub { color: var(--ink-2); margin: 4px 0 0; }
-.tiles { display: flex; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
-.tile {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 16px; min-width: 130px;
-}
-.tile .v { font-size: 22px; font-weight: 600; }
-.tile .k { color: var(--muted); font-size: 12px; }
-.hero {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 16px 20px; margin: 0 0 24px;
-}
-.hero .rank { color: var(--muted); font-size: 12px; }
-.hero .name { font-size: 18px; font-weight: 600; }
-.hero .name a { color: inherit; }
-.hero .metrics { color: var(--ink-2); margin-top: 4px; }
-.hero .biz { color: var(--ink-2); margin-top: 8px; font-size: 13px; }
-.hero .owners { color: var(--muted); margin-top: 4px; font-size: 13px; }
+header .sub { color: var(--ink-2); margin: 0; font-size: 13px; }
 .logic {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px 20px; margin: 0 0 16px;
+  border-radius: 10px; padding: 10px 16px; margin: 14px 0;
   font-size: 13px; color: var(--ink-2);
 }
 .logic b { color: var(--ink); }
+.tabs { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; }
+.tab {
+  flex: none; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--ink-2); font-size: 12px;
+  padding: 3px 12px; cursor: pointer;
+}
+.tab .n { color: var(--muted); }
+.tab.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.hint { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
 .tablebox {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; overflow-x: auto;
 }
-table { border-collapse: collapse; width: 100%; min-width: 860px; }
-details.fin { margin-top: 4px; }
-details.fin summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-.fin table { width: auto; min-width: 0; margin: 6px 0 2px; }
-.fin th { position: static; background: none; border-bottom: 1px solid var(--grid); padding: 2px 14px 2px 0; }
-.fin td { color: var(--ink-2); font-size: 12px; border-bottom: 0; padding: 2px 14px 2px 0; }
-th {
+table.main { border-collapse: collapse; width: 100%; min-width: 1020px; }
+table.main > thead th {
   text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
   padding: 10px 8px; border-bottom: 1px solid var(--grid);
-  position: sticky; top: 0; background: var(--surface);
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
 }
-td { padding: 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
-tbody tr:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.main > tbody td { padding: 9px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr.r { cursor: pointer; }
+tr.r:hover { background: var(--wash); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .code a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
 .co { font-weight: 600; }
-.sector { color: var(--muted); font-size: 12px; }
+.sector { color: var(--muted); font-size: 11px; margin-left: 4px; }
 .scorebar {
-  display: inline-block; width: 72px; height: 6px; background: var(--bar-track);
+  display: inline-block; width: 64px; height: 6px; background: var(--bar-track);
   border-radius: 0 4px 4px 0; vertical-align: 2px; margin-left: 8px;
 }
 .scorebar i { display: block; height: 100%; background: var(--bar);
   border-radius: 0 4px 4px 0; }
-.biz { color: var(--muted); font-size: 12px; max-width: 420px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.owners { font-size: 12px; color: var(--ink-2); }
-.chip {
+.biz {
+  color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.owners { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.vcchip {
   display: inline-block; border: 1px solid var(--border); border-radius: 4px;
   color: var(--muted); font-size: 11px; padding: 0 4px; margin-left: 4px;
 }
 .warn { color: var(--muted); font-size: 11px; }
-footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
+tr.panel > td { background: var(--wash); padding: 14px 16px 16px; }
+.bizfull { color: var(--ink-2); font-size: 13px; max-width: 72em; margin: 0 0 10px; }
+.meta { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+.panelflex { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.fin table { border-collapse: collapse; }
+.fin th {
+  color: var(--muted); font-weight: 500; font-size: 11px; text-align: left;
+  padding: 2px 14px 2px 0; border-bottom: 1px solid var(--grid);
+}
+.fin td { color: var(--ink-2); font-size: 12px; padding: 2px 14px 2px 0; }
+.sl { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.sparks { display: flex; gap: 20px; }
+svg.spark rect { fill: var(--bar); }
+.pholders { font-size: 12px; color: var(--ink-2); max-width: 60em; }
+.plinks { margin-top: 10px; font-size: 12px; }
+.plinks a { color: var(--ink-2); margin-right: 14px; }
+button.loadchart {
+  margin-top: 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--ink); font-size: 12px;
+  padding: 5px 12px; cursor: pointer;
+}
+button.loadchart:hover { background: var(--wash); }
+iframe.tvchart { width: 100%; height: 420px; border: 0; margin-top: 10px; border-radius: 8px; }
+footer { color: var(--muted); font-size: 12px; margin-top: 20px; }
+"""
+
+JS = """
+document.querySelectorAll("tr.r").forEach(function (tr) {
+  tr.addEventListener("click", function (e) {
+    if (e.target.closest("a, button")) return;
+    var p = tr.nextElementSibling;
+    if (p && p.classList.contains("panel")) p.hidden = !p.hidden;
+  });
+});
+var tabs = document.querySelectorAll(".tab");
+tabs.forEach(function (t) {
+  t.addEventListener("click", function () {
+    tabs.forEach(function (x) { x.classList.toggle("on", x === t); });
+    var s = t.dataset.sector;
+    document.querySelectorAll("tr.r").forEach(function (tr) {
+      var show = !s || tr.dataset.sector === s;
+      tr.hidden = !show;
+      var p = tr.nextElementSibling;
+      if (p && p.classList.contains("panel")) p.hidden = true;
+    });
+  });
+});
+document.querySelectorAll("button.loadchart").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    var f = document.createElement("iframe");
+    f.className = "tvchart";
+    f.loading = "lazy";
+    f.src = "https://s.tradingview.com/widgetembed/?symbol=TSE%3A" +
+      encodeURIComponent(b.dataset.code) +
+      "&interval=M&style=1&locale=ja&timezone=Asia%2FTokyo" +
+      "&hidesidetoolbar=1&symboledit=0&saveimage=0&withdateranges=1" +
+      "&theme=" + (dark ? "dark" : "light");
+    b.replaceWith(f);
+  });
+});
 """
 
 
@@ -135,8 +195,55 @@ def _yen(v: Optional[float]) -> str:
     return f"{v / 1e8:,.0f}億"
 
 
-def _fin_details_html(fin_rows) -> str:
-    """決算推移(実績+予想)の折りたたみ表。"""
+def _shares(fin_rows) -> Optional[float]:
+    """推定株式数 = (株主資本 or 純資産)/BPS の直近値(screen.pyの希薄化と同じ近似)。"""
+    for f in reversed(fin_rows):
+        if f["is_forecast"]:
+            continue
+        base = f.get("shareholders_equity") or f.get("net_assets")
+        bps = f.get("bps")
+        if base and bps:
+            return base / bps
+    return None
+
+
+def _latest_actual(fin_rows, key: str) -> Optional[float]:
+    for f in reversed(fin_rows):
+        if not f["is_forecast"] and f.get(key) is not None:
+            return f[key]
+    return None
+
+
+def _bars_svg(fin_rows, key: str) -> str:
+    """実績の推移ミニバー。負値は基準線の下に描く(符号は位置で伝える)。"""
+    pts = [(f["fiscal_year"], f.get(key)) for f in fin_rows
+           if not f["is_forecast"]][-6:]
+    vals = [v for _, v in pts if v is not None]
+    if len(vals) < 2:
+        return ""
+    mx = max(abs(v) for v in vals) or 1
+    has_neg = any(v < 0 for v in vals)
+    w, gap, h = 14, 2, 44
+    base = h // 2 if has_neg else h - 1
+    amp = h // 2 - 2 if has_neg else h - 3
+    rects = []
+    x = 0
+    for fy, v in pts:
+        if v is not None:
+            bh = max(2, round(abs(v) / mx * amp))
+            y = base - bh if v >= 0 else base
+            rects.append(
+                f'<rect x="{x}" y="{y}" width="{w}" height="{bh}" rx="2">'
+                f'<title>{_esc(fy)}: {_yen(v)}</title></rect>')
+        x += w + gap
+    total = x - gap
+    return (f'<svg class="spark" width="{total}" height="{h}" '
+            f'viewBox="0 0 {total} {h}" role="img">'
+            f'<line x1="0" x2="{total}" y1="{base}" y2="{base}" '
+            f'stroke="var(--grid)" stroke-width="1"/>{"".join(rects)}</svg>')
+
+
+def _fin_table_html(fin_rows) -> str:
     if not fin_rows:
         return ""
     body = "\n".join(
@@ -146,10 +253,70 @@ def _fin_details_html(fin_rows) -> str:
         f"<td class=\"num\">{_yen(f['net_income'])}</td>"
         f"<td class=\"num\">{_yen(f['op_cf'])}</td></tr>"
         for f in fin_rows)
-    return (f'<details class="fin"><summary>決算推移</summary><table>'
+    return (f'<div class="fin"><table>'
             f'<tr><th>年度</th><th class="num">売上</th><th class="num">営利</th>'
             f'<th class="num">純利</th><th class="num">営業CF</th></tr>'
-            f'{body}</table></details>')
+            f'{body}</table></div>')
+
+
+def _panel_html(code: str, m: Dict, fin_rows, biz_full: Optional[str]) -> str:
+    dilution = m.get("dilution")
+    dilution_note = (" ⚠分割の境界誤差の可能性あり"
+                     if dilution is not None and abs(dilution) > 0.5 else "")
+    eq = m.get("equity_ratio")
+    eq_s = f"{eq:.0f}%" if eq is not None else "-"
+    meta = (f"自己資本比率 {eq_s}"
+            f" ・ 株式数変化 {_pct(dilution, signed=True)}{dilution_note}"
+            f" ・ 大株主データ時点 {_esc(m.get('holder_as_of') or '-')}")
+    owners = " / ".join(_esc(o) for o in (m.get("owner_names") or [])) or "個人大株主なし"
+    vc = (f"<br>VC・ファンド: {_esc(' / '.join(m.get('vc_names') or []))}"
+          if m.get("has_vc") else "")
+    biz = (f'<p class="bizfull">{_esc(biz_full)}</p>' if biz_full else "")
+    sparks = ""
+    rev_s, op_s = _bars_svg(fin_rows, "revenue"), _bars_svg(fin_rows, "op_income")
+    if rev_s or op_s:
+        sparks = ('<div class="sparks">'
+                  + (f'<div><div class="sl">売上</div>{rev_s}</div>' if rev_s else "")
+                  + (f'<div><div class="sl">営業利益</div>{op_s}</div>' if op_s else "")
+                  + "</div>")
+    c = _esc(code)
+    return f"""<tr class="panel" hidden><td colspan="{COLS}">
+{biz}
+<p class="meta">{meta}</p>
+<div class="panelflex">{_fin_table_html(fin_rows)}{sparks}
+<div class="pholders">大株主(個人): {owners}{vc}</div></div>
+<button class="loadchart" data-code="{c}">📈 月足チャートを表示</button>
+<div class="plinks">
+<a href="https://irbank.net/{c}" target="_blank" rel="noopener">IR BANK</a>
+<a href="https://kabutan.jp/stock/?code={c}" target="_blank" rel="noopener">株探</a>
+<a href="https://www.tradingview.com/chart/?symbol=TSE%3A{c}" target="_blank" rel="noopener">TradingView</a>
+</div>
+</td></tr>"""
+
+
+def _row_html(r, m: Dict, fin_rows, biz_full: Optional[str],
+              close: Optional[float]) -> str:
+    code, sector = r["code"], r["sector33"] or r["market"]
+    shares = _shares(fin_rows)
+    mcap = close * shares if (close and shares) else None
+    top_owner = (m.get("owner_names") or ["-"])[0]
+    vc = '<span class="vcchip">VC</span>' if m.get("has_vc") else ""
+    biz_line = (f'<div class="biz">{_esc(m.get("business"))}</div>'
+                if m.get("business") else "")
+    main = f"""<tr class="r" data-sector="{_esc(sector)}">
+<td class="num">{r["rank"]}</td>
+<td class="code"><a href="https://irbank.net/{_esc(code)}" target="_blank" rel="noopener">{_esc(code)}</a></td>
+<td><span class="co">{_esc(r["name"])}</span><span class="sector">{_esc(sector)}</span>{vc}{biz_line}</td>
+<td class="num">{r["score"]:.3f}<span class="scorebar"><i style="width:{r["score"] * 100:.0f}%"></i></span></td>
+<td class="num">{_yen(mcap)}</td>
+<td class="num">{_yen(_latest_actual(fin_rows, "revenue"))}</td>
+<td class="num">{_yen(_latest_actual(fin_rows, "op_income"))}</td>
+<td class="num">{_pct(m.get("rev_cagr"))}</td>
+<td class="num">{m.get("consec_growth", "-")}期</td>
+<td class="num">{f"{m['op_cf_margin']:.1f}%" if m.get("op_cf_margin") is not None else "-"}</td>
+<td class="owners">{_esc(top_owner)}</td>
+</tr>"""
+    return main + "\n" + _panel_html(code, m, fin_rows, biz_full)
 
 
 def _logic_html() -> str:
@@ -171,50 +338,31 @@ def _logic_html() -> str:
 </div>"""
 
 
-def _row_html(rank: int, code: str, name: str, sector: str, score: float,
-              m: Dict, fin_rows=()) -> str:
-    dilution = m.get("dilution")
-    # 分割イベントの境界誤差の可能性が高い値には注記を付ける(既知の制約)
-    dilution_note = (' <span class="warn" title="株式分割の境界誤差の可能性">⚠分割?</span>'
-                     if dilution is not None and abs(dilution) > 0.5 else "")
-    owners = " ".join(_esc(o) for o in (m.get("owner_names") or [])) or "-"
-    vc = (f'<span class="chip" title="{_esc(" / ".join(m.get("vc_names") or []))}">VC</span>'
-          if m.get("has_vc") else "")
-    biz = f'<div class="biz">{_esc(m.get("business"))}</div>' if m.get("business") else ""
-    fin = _fin_details_html(fin_rows)
-    return f"""<tr>
-<td class="num">{rank}</td>
-<td class="code"><a href="https://irbank.net/{_esc(code)}" target="_blank" rel="noopener">{_esc(code)}</a></td>
-<td><span class="co">{_esc(name)}</span> <span class="sector">{_esc(sector)}</span>{biz}{fin}</td>
-<td class="num">{score:.3f}<span class="scorebar"><i style="width:{score * 100:.0f}%"></i></span></td>
-<td class="num">{_pct(m.get("rev_cagr"))}</td>
-<td class="num">{m.get("consec_growth", "-")}期</td>
-<td class="num">{f"{m['op_cf_margin']:.1f}%" if m.get("op_cf_margin") is not None else "-"}</td>
-<td class="num">{f"{m['equity_ratio']:.0f}%" if m.get("equity_ratio") is not None else "-"}</td>
-<td class="num">{_pct(dilution, signed=True)}{dilution_note}</td>
-<td class="owners">{owners}{vc}</td>
-</tr>"""
+def _tabs_html(rows) -> str:
+    counts: Dict[str, int] = {}
+    for r in rows:
+        s = r["sector33"] or r["market"]
+        counts[s] = counts.get(s, 0) + 1
+    chips = [f'<button class="tab on" data-sector="">全て <span class="n">{len(rows)}</span></button>']
+    for s, n in sorted(counts.items(), key=lambda t: -t[1]):
+        chips.append(f'<button class="tab" data-sector="{_esc(s)}">'
+                     f'{_esc(s)} <span class="n">{n}</span></button>')
+    return '<div class="tabs">' + "".join(chips) + "</div>"
 
 
-def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None) -> str:
+def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
+               businesses: Optional[Dict] = None,
+               prices: Optional[Dict] = None) -> str:
     fins = fins or {}
+    businesses = businesses or {}
+    prices = prices or {}
     body_rows = "\n".join(
-        _row_html(r["rank"], r["code"], r["name"], r["sector33"] or r["market"],
-                  r["score"], json.loads(r["metrics_json"]), fins.get(r["code"], ()))
+        _row_html(r, json.loads(r["metrics_json"]), fins.get(r["code"], ()),
+                  businesses.get(r["code"]),
+                  prices.get(r["code"], (None, None))[1])
         for r in rows)
-
-    hero_html = ""
-    if rows:
-        top = rows[0]
-        m = json.loads(top["metrics_json"])
-        owners = " / ".join(_esc(o) for o in (m.get("owner_names") or [])) or "-"
-        hero_html = f"""<div class="hero">
-<div class="rank">本日の1位</div>
-<div class="name"><a href="https://irbank.net/{_esc(top["code"])}" target="_blank" rel="noopener">{_esc(top["name"])}</a> ({_esc(top["code"])}/{_esc(top["market"])}) — スコア {top["score"]:.3f}</div>
-<div class="metrics">売上CAGR {_pct(m.get("rev_cagr"))} ・ 連続増収増益 {m.get("consec_growth", "-")}期 ・ 営業CFマージン {f"{m['op_cf_margin']:.1f}%" if m.get("op_cf_margin") is not None else "-"} ・ 自己資本比率 {f"{m['equity_ratio']:.0f}%" if m.get("equity_ratio") is not None else "-"}</div>
-<div class="biz">{_esc(m.get("business"))}</div>
-<div class="owners">大株主: {owners}</div>
-</div>"""
+    price_dates = sorted({d for d, _ in prices.values()}) if prices else []
+    price_note = f"終値 {price_dates[-1]} 時点" if price_dates else "株価未取得"
 
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -228,21 +376,17 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None) ->
 <div class="wrap">
 <header>
 <h1>kabu-screener</h1>
-<p class="sub">{_esc(run_date)} 実行 — 増収増益・CF良好・(できれば)オーナー大株主の発見機</p>
+<p class="sub">{_esc(run_date)} 実行 ・ 候補 {stats["candidates"]:,}社 / 上場 {stats["companies"]:,}社 ・ {price_note}</p>
 </header>
 {_logic_html()}
-<div class="tiles">
-<div class="tile"><div class="v">{stats["candidates"]:,}</div><div class="k">候補(営業CF赤字なし)</div></div>
-<div class="tile"><div class="v">{stats["companies"]:,}</div><div class="k">上場銘柄</div></div>
-<div class="tile"><div class="v">{stats["edinet"]:,}</div><div class="k">EDINET収録社数</div></div>
-</div>
-{hero_html}
+{_tabs_html(rows)}
+<p class="hint">行をクリックすると事業内容・決算推移・大株主・月足チャートが開きます</p>
 <div class="tablebox">
-<table>
+<table class="main">
 <thead><tr>
 <th class="num">#</th><th>code</th><th>銘柄 / 事業</th><th class="num">スコア</th>
-<th class="num">売上CAGR</th><th class="num">連続</th><th class="num">CF率</th>
-<th class="num">自己資本</th><th class="num">株式数変化</th><th>大株主(個人)</th>
+<th class="num">時価総額</th><th class="num">売上(直近)</th><th class="num">営利(直近)</th>
+<th class="num">売上CAGR</th><th class="num">連続</th><th class="num">CF率</th><th>筆頭オーナー</th>
 </tr></thead>
 <tbody>
 {body_rows}
@@ -250,11 +394,12 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None) ->
 </table>
 </div>
 <footer>
-生成: {datetime.now().strftime("%Y-%m-%d %H:%M")} / データ: EDINET(金融庁)・IR BANK・JPX /
-スコアは全上場企業内パーセンタイルの加重平均。自分用スクリーナーであり投資勧誘ではない。
-コードのリンク先はIR BANK。
+生成: {datetime.now().strftime("%Y-%m-%d %H:%M")} / データ: EDINET(金融庁)・IR BANK・JPX・J-Quants(終値、無料プランは12週遅延) /
+時価総額は終値×推定株式数(純資産÷BPS)の概算。スコアは全上場企業内パーセンタイルの加重平均。
+自分用スクリーナーであり投資勧誘ではない。
 </footer>
 </div>
+<script>{JS}</script>
 </body>
 </html>
 """
@@ -277,30 +422,37 @@ def generate(conn, top: int) -> Optional[Path]:
             "SELECT COUNT(*) FROM screen_results WHERE run_date = ?",
             (run_date,)).fetchone()[0],
         "companies": conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0],
-        "edinet": conn.execute(
-            "SELECT COUNT(DISTINCT code) FROM financials WHERE source='edinet'"
-        ).fetchone()[0],
     }
     codes = [r["code"] for r in rows]
     fins: Dict[str, list] = {c: [] for c in codes}
+    businesses: Dict[str, str] = {}
+    prices: Dict[str, tuple] = {}
     if codes:
         ph = ",".join("?" * len(codes))
         for f in conn.execute(
-                f"""SELECT code, fiscal_year, is_forecast,
-                           revenue, op_income, net_income, op_cf
+                f"""SELECT code, fiscal_year, is_forecast, revenue, op_income,
+                           net_income, op_cf, shareholders_equity, net_assets, bps
                     FROM financials WHERE code IN ({ph})
                     ORDER BY code, fiscal_year""", codes):
             fins[f["code"]].append(dict(f))
+        for b in conn.execute(
+                f"SELECT code, description FROM business WHERE code IN ({ph})", codes):
+            businesses[b["code"]] = _snippet(b["description"], 600)
+        for p in conn.execute(
+                f"SELECT code, date, close FROM prices WHERE code IN ({ph})", codes):
+            prices[p["code"]] = (p["date"], p["close"])
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     out = SITE_DIR / "index.html"
-    out.write_text(build_html(run_date, rows, stats, fins), encoding="utf-8")
+    out.write_text(
+        build_html(run_date, rows, stats, fins, businesses, prices),
+        encoding="utf-8")
     print(f"{out} を生成しました({run_date}, {len(rows)}行)")
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--top", type=int, default=50)
+    ap.add_argument("--top", type=int, default=100)
     args = ap.parse_args()
     # 生成できなかったら非ゼロ終了(daily.shが古いページを再公開しないためのゲート)
     if generate(get_conn(), args.top) is None:

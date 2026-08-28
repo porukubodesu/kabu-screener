@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS screen_results (
     PRIMARY KEY (run_date, code)
 );
 
+CREATE TABLE IF NOT EXISTS prices (
+    code       TEXT PRIMARY KEY,
+    date       TEXT NOT NULL,      -- 終値の日付('YYYY-MM-DD')
+    close      REAL NOT NULL,      -- 終値(円)
+    fetched_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_holders_code ON holders(code, as_of);
 CREATE INDEX IF NOT EXISTS idx_financials_code ON financials(code);
 """
