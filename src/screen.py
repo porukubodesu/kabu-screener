@@ -34,13 +34,13 @@ NG_BUSINESS_KEYWORDS = [
 ]
 
 # ---- スコアの重み(パーセンタイル0〜1に掛ける。合計は自動で正規化) ----
+# 営業CFマージンと非希薄化は2026-08-28にスコアから除外(ユーザー判断)。
+# CFの健全性はハードフィルタ(赤字なし)で担保し、希薄化は表示のみ
 WEIGHTS = {
-    "rev_cagr": 0.30,        # 売上CAGR(「ちゃんと」成長の水準)
-    "consec_growth": 0.20,   # 連続増収増益の年数(一貫性)
-    "op_cf_margin": 0.15,    # 営業CFマージン(直近3期平均)
-    "owner_ratio": 0.15,     # オーナー個人の保有率
-    "equity_ratio": 0.10,    # 自己資本比率
-    "anti_dilution": 0.10,   # 希薄化していない(株式数増加率の低さ)
+    "rev_cagr": 0.40,        # 売上CAGR(「ちゃんと」成長の水準)
+    "consec_growth": 0.25,   # 連続増収増益の年数(一貫性)
+    "owner_ratio": 0.20,     # オーナー個人の保有率
+    "equity_ratio": 0.15,    # 自己資本比率
 }
 
 # ---- 大株主の分類ルール ----
@@ -253,11 +253,8 @@ def run_screen(conn, top: int):
     pct = {}
     pct["rev_cagr"] = percentile_map({c: m["rev_cagr"] for c, m in metrics.items()})
     pct["consec_growth"] = percentile_map({c: float(m["consec_growth"]) for c, m in metrics.items()})
-    pct["op_cf_margin"] = percentile_map({c: m["op_cf_margin"] for c, m in metrics.items()})
     pct["owner_ratio"] = percentile_map({c: m["owner_ratio"] for c, m in metrics.items()})
     pct["equity_ratio"] = percentile_map({c: m["equity_ratio"] for c, m in metrics.items()})
-    pct["anti_dilution"] = percentile_map(
-        {c: -m["dilution"] for c, m in metrics.items() if m["dilution"] is not None})
 
     # 事業内容(EDINET由来。未取り込みなら空でNG除外は発動しない)
     businesses = {r["code"]: r["description"] for r in

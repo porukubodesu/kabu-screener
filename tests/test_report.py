@@ -33,7 +33,7 @@ def _seed(conn):
     conn.execute("INSERT INTO financials(code, fiscal_year, is_forecast, source, revenue)"
                  " VALUES ('7203','2027/03', 1, 'irbank', 52000000000000)")
     conn.execute("INSERT INTO business VALUES ('7203', '3 【事業の内容】自動車事業を中心に'"
-                 " || 'ロングテキスト' , '2026-03-31', '2026-08-22')")
+                 " || '<試験>ロングテキスト' , '2026-03-31', '2026-08-22')")
     # 7203はmktcap無し(推定計算のフォールバック)、9984は公式mktcapあり
     conn.execute("INSERT INTO prices VALUES ('7203', '2026-08-27', 3000.0, NULL, '2026-08-28T07:00:00')")
     conn.execute("INSERT INTO prices VALUES ('9984', '2026-08-27', 100.0, 4500000000000.0, '2026-08-28T07:00:00')")
@@ -65,16 +65,23 @@ class TestReport(unittest.TestCase):
         # 銘柄名・事業内容のHTMLはエスケープされる(XSS/レイアウト崩れ防止)
         self.assertNotIn("<スクリプト>", self.html)
         self.assertIn("&lt;スクリプト&gt;", self.html)
-        self.assertIn("&lt;販売&gt;", self.html)
+        self.assertIn("&lt;試験&gt;", self.html)
+
+    def test_business_heading_stripped(self):
+        # 「3 【事業の内容】」の見出しゴミを落とし本文から始める
+        self.assertNotIn("【事業の内容】", self.html)
+        self.assertIn("自動車事業を中心に", self.html)
 
     def test_split_artifact_flagged_and_vc_chip(self):
-        self.assertIn("分割の境界誤差", self.html)   # dilution +210% には注記
+        self.assertIn("分割境界", self.html)   # dilution +210% には注記(チップのtitle)
         self.assertIn(">VC</span>", self.html)
 
     def test_logic_box_reflects_screen_constants(self):
-        self.assertIn("ロジック", self.html)
+        self.assertIn("スクリーニングのロジック", self.html)
         self.assertIn("営業CFの赤字なし", self.html)      # 有効なハードフィルタ
-        self.assertIn("売上CAGR 30%", self.html)          # WEIGHTSから動的生成
+        self.assertIn("売上CAGR 40%", self.html)          # WEIGHTSから動的生成
+        self.assertNotIn("営業CFマージン", self.html)     # スコアから除外済み
+        self.assertNotIn("非希薄化", self.html)
         self.assertIn("パチンコ", self.html)              # NGワード一覧
 
     def test_fin_table_and_sparkbars(self):
@@ -83,11 +90,14 @@ class TestReport(unittest.TestCase):
         self.assertIn("2027/03(予)", self.html)  # 予想行のマーク
         self.assertIn('class="spark"', self.html)  # 実績2期以上でミニバー
 
-    def test_sector_tabs(self):
-        self.assertIn('data-sector="輸送用機器"', self.html)   # タブ+行の両方
+    def test_sector_tabs_and_cards(self):
+        self.assertIn('data-sector="輸送用機器"', self.html)   # タブ+カードの両方
         self.assertIn("全て", self.html)
         # sector33が無い銘柄はmarketで代替
         self.assertIn('data-sector="プライム"', self.html)
+        # カード型: クリック無しで決算・事業・大株主が最初から見える(hidden無し)
+        self.assertIn('<article class="card"', self.html)
+        self.assertNotIn("hidden", self.html.split("<article")[1].split("</article>")[0])
 
     def test_market_cap_from_price_and_shares(self):
         # mktcap無し: 株式数 = 純資産1e12/BPS1000 = 1e9株、終値3000円 → 3.00兆

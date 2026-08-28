@@ -1,22 +1,24 @@
 """スクリーニング結果の静的HTMLレポートを生成する。
 
-data/site/index.html に自己完結のページを書き出す(CSS/JSインライン)。
+data/site/index.html に自己完結のページ(CSS/JSインライン)を書き出す。
 daily.sh がこれを site ブランチに載せてGitHub Pagesで公開する。
 
 構成:
-- ロジック説明(screen.pyの定数から動的生成)
+- ヒーローヘッダ+ロジック説明(screen.pyの定数から動的生成)
 - 業種タブ(クリックで絞り込み)
-- 一覧: スコア・時価総額(J-Quants終値×推定株式数の概算)・直近業績・指標
-- 行クリックで詳細パネル: 事業内容全文スニペット・決算推移(表+バー)・大株主・
-  月足チャート(TradingView埋め込み、クリック時のみロード)
+- カード一覧(クリック不要で全情報をそのまま表示):
+  スコア・時価総額・直近業績・指標チップ・事業内容・決算推移(表+ミニバー)・大株主。
+  月足チャート(TradingView埋め込み)だけはボタン押下時にロード(全カード分の
+  自動ロードは重すぎるため)
 
 使い方:
   .venv/bin/python -m src.report            # 最新のscreen_resultsから生成
-  .venv/bin/python -m src.report --top 100
+  .venv/bin/python -m src.report --top 300
 """
 import argparse
 import html
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,13 +29,15 @@ from .screen import (EXCLUDE_VC, MIN_OWNER_RATIO, NG_BUSINESS_KEYWORDS,
                      REQUIRE_OP_CF_NONNEG, WEIGHTS, _snippet)
 
 SITE_DIR = DATA_DIR / "site"
-COLS = 11  # 一覧の列数(詳細パネルのcolspan)
 
 WEIGHT_LABELS = {
     "rev_cagr": "売上CAGR", "consec_growth": "連続増収増益",
     "op_cf_margin": "営業CFマージン", "owner_ratio": "オーナー保有率",
     "equity_ratio": "自己資本比率", "anti_dilution": "非希薄化",
 }
+
+# 有報「事業の内容」冒頭の見出しゴミ(「3 【事業の内容】」等)を落とす
+_BIZ_HEAD_RE = re.compile(r"^[0-9０-９]*\s*【事業の内容】\s*")
 
 # 配色はdatavizスキルの検証済みリファレンスパレット(役割トークンのみ使用)
 CSS = """
@@ -42,7 +46,9 @@ CSS = """
   --page: #f9f9f7; --surface: #fcfcfb;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
-  --bar: #2a78d6; --bar-track: #f0efec; --wash: rgba(11,11,11,0.04);
+  --accent: #2a78d6; --accent-soft: rgba(42,120,214,0.10);
+  --track: #f0efec; --wash: rgba(11,11,11,0.04);
+  --shadow: 0 1px 2px rgba(11,11,11,0.05), 0 4px 16px rgba(11,11,11,0.05);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -50,112 +56,106 @@ CSS = """
     --page: #0d0d0d; --surface: #1a1a19;
     --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --bar: #3987e5; --bar-track: #383835; --wash: rgba(255,255,255,0.05);
+    --accent: #3987e5; --accent-soft: rgba(57,135,229,0.16);
+    --track: #383835; --wash: rgba(255,255,255,0.05);
+    --shadow: none;
   }
 }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--page); color: var(--ink);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 14px; line-height: 1.6;
+  font-size: 14px; line-height: 1.65;
 }
-.wrap { max-width: 1160px; margin: 0 auto; padding: 20px 16px 48px; }
-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
-header h1 { font-size: 20px; margin: 0; }
-header .sub { color: var(--ink-2); margin: 0; font-size: 13px; }
-.logic {
+.wrap { max-width: 880px; margin: 0 auto; padding: 36px 18px 64px; }
+.hero h1 { font-size: 30px; letter-spacing: -0.02em; margin: 0 0 4px; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero .lead { color: var(--ink-2); margin: 0; font-size: 14px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+.pill {
+  border: 1px solid var(--border); background: var(--surface);
+  border-radius: 999px; padding: 3px 12px; font-size: 12px; color: var(--ink-2);
+}
+.pill b { color: var(--ink); font-variant-numeric: tabular-nums; }
+details.logic { margin: 10px 0 0; font-size: 13px; color: var(--ink-2); }
+details.logic summary { cursor: pointer; color: var(--muted); }
+details.logic .box {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 16px; margin: 14px 0;
-  font-size: 13px; color: var(--ink-2);
+  border-radius: 12px; padding: 10px 16px; margin-top: 8px;
 }
-.logic b { color: var(--ink); }
-.tabs { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; }
+.tabs { display: flex; gap: 6px; overflow-x: auto; padding: 18px 0 4px; position: sticky; top: 0; background: var(--page); z-index: 5; }
 .tab {
   flex: none; border: 1px solid var(--border); border-radius: 999px;
   background: var(--surface); color: var(--ink-2); font-size: 12px;
-  padding: 3px 12px; cursor: pointer;
+  padding: 4px 13px; cursor: pointer;
 }
 .tab .n { color: var(--muted); }
-.tab.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
-.hint { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
-.tablebox {
+.tab.on { background: var(--ink); border-color: var(--ink); color: var(--page); font-weight: 600; }
+.tab.on .n { color: var(--page); opacity: 0.7; }
+.card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; overflow-x: auto;
+  border-radius: 16px; box-shadow: var(--shadow);
+  padding: 18px 20px 14px; margin-top: 14px;
 }
-table.main { border-collapse: collapse; width: 100%; min-width: 1020px; }
-table.main > thead th {
-  text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
-  padding: 10px 8px; border-bottom: 1px solid var(--grid);
-  position: sticky; top: 0; background: var(--surface); z-index: 1;
+.chead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.rank { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 2.4em; }
+.cname { font-size: 17px; font-weight: 700; }
+.cname a { color: inherit; text-decoration: none; }
+.cname a:hover { color: var(--accent); }
+.ccode { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 2px; }
+.tag {
+  border: 1px solid var(--border); border-radius: 999px; color: var(--muted);
+  font-size: 11px; padding: 1px 9px; vertical-align: 2px;
 }
-table.main > tbody td { padding: 9px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
-tr.r { cursor: pointer; }
-tr.r:hover { background: var(--wash); }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.code a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
-.co { font-weight: 600; }
-.sector { color: var(--muted); font-size: 11px; margin-left: 4px; }
-.scorebar {
-  display: inline-block; width: 64px; height: 6px; background: var(--bar-track);
-  border-radius: 0 4px 4px 0; vertical-align: 2px; margin-left: 8px;
+.cscore { margin-left: auto; text-align: right; }
+.cscore b { font-size: 17px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.cscore .sl { color: var(--muted); font-size: 11px; margin-right: 4px; }
+.scoretrack { height: 4px; background: var(--track); border-radius: 0 4px 4px 0; margin-top: 6px; }
+.scoretrack i { display: block; height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.chip {
+  background: var(--accent-soft); color: var(--ink-2); border-radius: 8px;
+  font-size: 12px; padding: 3px 10px;
 }
-.scorebar i { display: block; height: 100%; background: var(--bar);
-  border-radius: 0 4px 4px 0; }
-.biz {
-  color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 2px;
-  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.owners { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
-.vcchip {
-  display: inline-block; border: 1px solid var(--border); border-radius: 4px;
-  color: var(--muted); font-size: 11px; padding: 0 4px; margin-left: 4px;
-}
-.warn { color: var(--muted); font-size: 11px; }
-tr.panel > td { background: var(--wash); padding: 14px 16px 16px; }
-.bizfull { color: var(--ink-2); font-size: 13px; max-width: 72em; margin: 0 0 10px; }
-.meta { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
-.panelflex { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.chip b { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+.cbiz { color: var(--ink-2); font-size: 13px; margin: 12px 0 0; }
+.cgrid { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: flex-start; margin-top: 12px; }
 .fin table { border-collapse: collapse; }
 .fin th {
   color: var(--muted); font-weight: 500; font-size: 11px; text-align: left;
   padding: 2px 14px 2px 0; border-bottom: 1px solid var(--grid);
 }
-.fin td { color: var(--ink-2); font-size: 12px; padding: 2px 14px 2px 0; }
+.fin th.num { text-align: right; }
+.fin td { color: var(--ink-2); font-size: 12px; padding: 2px 14px 2px 0;
+  text-align: right; font-variant-numeric: tabular-nums; }
+.fin td:first-child { text-align: left; }
 .sl { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
 .sparks { display: flex; gap: 20px; }
-svg.spark rect { fill: var(--bar); }
-.pholders { font-size: 12px; color: var(--ink-2); max-width: 60em; }
-.plinks { margin-top: 10px; font-size: 12px; }
-.plinks a { color: var(--ink-2); margin-right: 14px; }
+svg.spark rect { fill: var(--accent); }
+.cowners { color: var(--muted); font-size: 12px; margin-top: 12px; }
+.cowners b { color: var(--ink-2); font-weight: 500; }
+.cfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px;
+  border-top: 1px solid var(--grid); padding-top: 10px; }
+.cfoot a { color: var(--muted); font-size: 12px; }
+.cfoot a:hover { color: var(--accent); }
 button.loadchart {
-  margin-top: 10px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); color: var(--ink); font-size: 12px;
-  padding: 5px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--ink-2); font-size: 12px;
+  padding: 4px 14px; cursor: pointer;
 }
-button.loadchart:hover { background: var(--wash); }
-iframe.tvchart { width: 100%; height: 420px; border: 0; margin-top: 10px; border-radius: 8px; }
-footer { color: var(--muted); font-size: 12px; margin-top: 20px; }
+button.loadchart:hover { border-color: var(--accent); color: var(--accent); }
+iframe.tvchart { width: 100%; height: 420px; border: 0; margin-top: 10px; border-radius: 12px; }
+footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
 """
 
 JS = """
-document.querySelectorAll("tr.r").forEach(function (tr) {
-  tr.addEventListener("click", function (e) {
-    if (e.target.closest("a, button")) return;
-    var p = tr.nextElementSibling;
-    if (p && p.classList.contains("panel")) p.hidden = !p.hidden;
-  });
-});
 var tabs = document.querySelectorAll(".tab");
 tabs.forEach(function (t) {
   t.addEventListener("click", function () {
     tabs.forEach(function (x) { x.classList.toggle("on", x === t); });
     var s = t.dataset.sector;
-    document.querySelectorAll("tr.r").forEach(function (tr) {
-      var show = !s || tr.dataset.sector === s;
-      tr.hidden = !show;
-      var p = tr.nextElementSibling;
-      if (p && p.classList.contains("panel")) p.hidden = true;
+    document.querySelectorAll(".card").forEach(function (c) {
+      c.hidden = !!s && c.dataset.sector !== s;
     });
   });
 });
@@ -170,7 +170,8 @@ document.querySelectorAll("button.loadchart").forEach(function (b) {
       "&interval=M&style=1&locale=ja&timezone=Asia%2FTokyo" +
       "&hidesidetoolbar=1&symboledit=0&saveimage=0&withdateranges=1" +
       "&theme=" + (dark ? "dark" : "light");
-    b.replaceWith(f);
+    b.parentElement.after(f);
+    b.remove();
   });
 });
 """
@@ -193,6 +194,11 @@ def _yen(v: Optional[float]) -> str:
     if abs(v) >= 1e12:
         return f"{v / 1e12:,.2f}兆"
     return f"{v / 1e8:,.0f}億"
+
+
+def clean_business(text: str) -> str:
+    """有報の見出しゴミを落として本文から始める。"""
+    return _BIZ_HEAD_RE.sub("", text.lstrip())
 
 
 def _shares(fin_rows) -> Optional[float]:
@@ -248,10 +254,10 @@ def _fin_table_html(fin_rows) -> str:
         return ""
     body = "\n".join(
         f"<tr><td>{_esc(f['fiscal_year'])}{'(予)' if f['is_forecast'] else ''}</td>"
-        f"<td class=\"num\">{_yen(f['revenue'])}</td>"
-        f"<td class=\"num\">{_yen(f['op_income'])}</td>"
-        f"<td class=\"num\">{_yen(f['net_income'])}</td>"
-        f"<td class=\"num\">{_yen(f['op_cf'])}</td></tr>"
+        f"<td>{_yen(f['revenue'])}</td>"
+        f"<td>{_yen(f['op_income'])}</td>"
+        f"<td>{_yen(f['net_income'])}</td>"
+        f"<td>{_yen(f['op_cf'])}</td></tr>"
         for f in fin_rows)
     return (f'<div class="fin"><table>'
             f'<tr><th>年度</th><th class="num">売上</th><th class="num">営利</th>'
@@ -259,19 +265,33 @@ def _fin_table_html(fin_rows) -> str:
             f'{body}</table></div>')
 
 
-def _panel_html(code: str, m: Dict, fin_rows, biz_full: Optional[str]) -> str:
+def _card_html(r, m: Dict, fin_rows, biz: Optional[str],
+               close: Optional[float], mktcap: Optional[float]) -> str:
+    code, sector = r["code"], r["sector33"] or r["market"]
+    # 時価総額はJ-Quantsの公式値を優先、無ければ終値×推定株式数で概算
+    mcap = mktcap
+    if mcap is None:
+        shares = _shares(fin_rows)
+        mcap = close * shares if (close and shares) else None
     dilution = m.get("dilution")
-    dilution_note = (" ⚠分割の境界誤差の可能性あり"
-                     if dilution is not None and abs(dilution) > 0.5 else "")
+    dilution_note = "⚠" if dilution is not None and abs(dilution) > 0.5 else ""
     eq = m.get("equity_ratio")
-    eq_s = f"{eq:.0f}%" if eq is not None else "-"
-    meta = (f"自己資本比率 {eq_s}"
-            f" ・ 株式数変化 {_pct(dilution, signed=True)}{dilution_note}"
-            f" ・ 大株主データ時点 {_esc(m.get('holder_as_of') or '-')}")
+    cfm = m.get("op_cf_margin")
+    chips = [
+        f'<span class="chip">時価総額 <b>{_yen(mcap)}</b></span>',
+        f'<span class="chip">売上 <b>{_yen(_latest_actual(fin_rows, "revenue"))}</b></span>',
+        f'<span class="chip">営利 <b>{_yen(_latest_actual(fin_rows, "op_income"))}</b></span>',
+        f'<span class="chip">CAGR <b>{_pct(m.get("rev_cagr"))}</b></span>',
+        f'<span class="chip">連続増収増益 <b>{m.get("consec_growth", "-")}期</b></span>',
+        f'<span class="chip">自己資本 <b>{f"{eq:.0f}%" if eq is not None else "-"}</b></span>',
+        f'<span class="chip">CF率 <b>{f"{cfm:.1f}%" if cfm is not None else "-"}</b></span>',
+        f'<span class="chip" title="株式数変化(分割境界の誤差あり得る)">株式数 <b>{_pct(dilution, signed=True)}{dilution_note}</b></span>',
+    ]
     owners = " / ".join(_esc(o) for o in (m.get("owner_names") or [])) or "個人大株主なし"
-    vc = (f"<br>VC・ファンド: {_esc(' / '.join(m.get('vc_names') or []))}"
-          if m.get("has_vc") else "")
-    biz = (f'<p class="bizfull">{_esc(biz_full)}</p>' if biz_full else "")
+    vc_tag = '<span class="tag">VC</span>' if m.get("has_vc") else ""
+    vc_line = (f' ・ VC: {_esc(" / ".join(m.get("vc_names") or []))}'
+               if m.get("has_vc") else "")
+    biz_html = f'<p class="cbiz">{_esc(biz)}</p>' if biz else ""
     sparks = ""
     rev_s, op_s = _bars_svg(fin_rows, "revenue"), _bars_svg(fin_rows, "op_income")
     if rev_s or op_s:
@@ -280,46 +300,25 @@ def _panel_html(code: str, m: Dict, fin_rows, biz_full: Optional[str]) -> str:
                   + (f'<div><div class="sl">営業利益</div>{op_s}</div>' if op_s else "")
                   + "</div>")
     c = _esc(code)
-    return f"""<tr class="panel" hidden><td colspan="{COLS}">
-{biz}
-<p class="meta">{meta}</p>
-<div class="panelflex">{_fin_table_html(fin_rows)}{sparks}
-<div class="pholders">大株主(個人): {owners}{vc}</div></div>
-<button class="loadchart" data-code="{c}">📈 月足チャートを表示</button>
-<div class="plinks">
+    return f"""<article class="card" data-sector="{_esc(sector)}">
+<div class="chead">
+<span class="rank">#{r["rank"]}</span>
+<span class="cname"><a href="https://irbank.net/{c}" target="_blank" rel="noopener">{_esc(r["name"])}</a><span class="ccode">{c}</span></span>
+<span class="tag">{_esc(sector)}</span>{vc_tag}
+<span class="cscore"><span class="sl">score</span><b>{r["score"]:.3f}</b></span>
+</div>
+<div class="scoretrack"><i style="width:{r["score"] * 100:.0f}%"></i></div>
+<div class="chips">{"".join(chips)}</div>
+{biz_html}
+<div class="cgrid">{_fin_table_html(fin_rows)}{sparks}</div>
+<div class="cowners"><b>オーナー</b> {owners}{vc_line} ・ 時点 {_esc(m.get("holder_as_of") or "-")}</div>
+<div class="cfoot">
+<button class="loadchart" data-code="{c}">📈 月足チャート</button>
 <a href="https://irbank.net/{c}" target="_blank" rel="noopener">IR BANK</a>
 <a href="https://kabutan.jp/stock/?code={c}" target="_blank" rel="noopener">株探</a>
 <a href="https://www.tradingview.com/chart/?symbol=TSE%3A{c}" target="_blank" rel="noopener">TradingView</a>
 </div>
-</td></tr>"""
-
-
-def _row_html(r, m: Dict, fin_rows, biz_full: Optional[str],
-              close: Optional[float], mktcap: Optional[float]) -> str:
-    code, sector = r["code"], r["sector33"] or r["market"]
-    # 時価総額はJ-Quantsの公式値を優先、無ければ終値×推定株式数で概算
-    mcap = mktcap
-    if mcap is None:
-        shares = _shares(fin_rows)
-        mcap = close * shares if (close and shares) else None
-    top_owner = (m.get("owner_names") or ["-"])[0]
-    vc = '<span class="vcchip">VC</span>' if m.get("has_vc") else ""
-    biz_line = (f'<div class="biz">{_esc(m.get("business"))}</div>'
-                if m.get("business") else "")
-    main = f"""<tr class="r" data-sector="{_esc(sector)}">
-<td class="num">{r["rank"]}</td>
-<td class="code"><a href="https://irbank.net/{_esc(code)}" target="_blank" rel="noopener">{_esc(code)}</a></td>
-<td><span class="co">{_esc(r["name"])}</span><span class="sector">{_esc(sector)}</span>{vc}{biz_line}</td>
-<td class="num">{r["score"]:.3f}<span class="scorebar"><i style="width:{r["score"] * 100:.0f}%"></i></span></td>
-<td class="num">{_yen(mcap)}</td>
-<td class="num">{_yen(_latest_actual(fin_rows, "revenue"))}</td>
-<td class="num">{_yen(_latest_actual(fin_rows, "op_income"))}</td>
-<td class="num">{_pct(m.get("rev_cagr"))}</td>
-<td class="num">{m.get("consec_growth", "-")}期</td>
-<td class="num">{f"{m['op_cf_margin']:.1f}%" if m.get("op_cf_margin") is not None else "-"}</td>
-<td class="owners">{_esc(top_owner)}</td>
-</tr>"""
-    return main + "\n" + _panel_html(code, m, fin_rows, biz_full)
+</article>"""
 
 
 def _logic_html() -> str:
@@ -333,12 +332,15 @@ def _logic_html() -> str:
     weights = " / ".join(f"{WEIGHT_LABELS.get(k, k)} {w * 100:.0f}%"
                          for k, w in WEIGHTS.items())
     ng = "・".join(NG_BUSINESS_KEYWORDS)
-    return f"""<div class="logic">
-<b>ロジック</b>: ① 候補条件は「{"・".join(conds) or "なし"}」と事業内容のNGワード({_esc(ng)})除外のみ。
+    return f"""<details class="logic">
+<summary>スクリーニングのロジック</summary>
+<div class="box">
+① 候補条件は「{"・".join(conds) or "なし"}」と事業内容のNGワード({_esc(ng)})除外のみ。
 ② スコアは各指標の<b>全上場企業内パーセンタイル</b>(0〜1)の加重平均 — {weights}。
 オーナー保有・VC不在は必須条件にせず、スコアと表示で判断材料にする。
 ③ 判定機ではなく<b>発見機</b> — 上位から人間が四季報などで定性確認する前提。閾値の発明はしない。
-</div>"""
+</div>
+</details>"""
 
 
 def _tabs_html(rows) -> str:
@@ -359,11 +361,11 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
     fins = fins or {}
     businesses = businesses or {}
     prices = prices or {}
-    body_rows = "\n".join(
-        _row_html(r, json.loads(r["metrics_json"]), fins.get(r["code"], ()),
-                  businesses.get(r["code"]),
-                  prices.get(r["code"], (None, None, None))[1],
-                  prices.get(r["code"], (None, None, None))[2])
+    cards = "\n".join(
+        _card_html(r, json.loads(r["metrics_json"]), fins.get(r["code"], ()),
+                   businesses.get(r["code"]),
+                   prices.get(r["code"], (None, None, None))[1],
+                   prices.get(r["code"], (None, None, None))[2])
         for r in rows)
     price_dates = sorted({v[0] for v in prices.values()}) if prices else []
     price_note = f"終値 {price_dates[-1]} 時点" if price_dates else "株価未取得"
@@ -378,29 +380,22 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
 </head>
 <body>
 <div class="wrap">
-<header>
-<h1>kabu-screener</h1>
-<p class="sub">{_esc(run_date)} 実行 ・ 候補 {stats["candidates"]:,}社 / 上場 {stats["companies"]:,}社 ・ {_esc(price_note)}</p>
-</header>
-{_logic_html()}
-{_tabs_html(rows)}
-<p class="hint">行をクリックすると事業内容・決算推移・大株主・月足チャートが開きます</p>
-<div class="tablebox">
-<table class="main">
-<thead><tr>
-<th class="num">#</th><th>code</th><th>銘柄 / 事業</th><th class="num">スコア</th>
-<th class="num">時価総額</th><th class="num">売上(直近)</th><th class="num">営利(直近)</th>
-<th class="num">売上CAGR</th><th class="num">連続</th><th class="num">CF率</th><th>筆頭オーナー</th>
-</tr></thead>
-<tbody>
-{body_rows}
-</tbody>
-</table>
+<div class="hero">
+<h1>kabu-<em>screener</em></h1>
+<p class="lead">増収増益・キャッシュフロー良好・(できれば)オーナーが大株主 — 全上場企業からの発見機</p>
+<div class="pills">
+<span class="pill">実行 <b>{_esc(run_date)}</b></span>
+<span class="pill">候補 <b>{stats["candidates"]:,}</b>社 / 上場 {stats["companies"]:,}社</span>
+<span class="pill">表示 上位<b>{len(rows)}</b>社</span>
+<span class="pill">{_esc(price_note)}</span>
 </div>
+{_logic_html()}
+</div>
+{_tabs_html(rows)}
+{cards}
 <footer>
 生成: {datetime.now().strftime("%Y-%m-%d %H:%M")} / データ: EDINET(金融庁)・IR BANK・JPX・J-Quants(終値・時価総額、無料プランは12週遅延) /
-スコアは全上場企業内パーセンタイルの加重平均。
-自分用スクリーナーであり投資勧誘ではない。
+スコアは全上場企業内パーセンタイルの加重平均。自分用スクリーナーであり投資勧誘ではない。
 </footer>
 </div>
 <script>{JS}</script>
@@ -441,7 +436,7 @@ def generate(conn, top: int) -> Optional[Path]:
             fins[f["code"]].append(dict(f))
         for b in conn.execute(
                 f"SELECT code, description FROM business WHERE code IN ({ph})", codes):
-            businesses[b["code"]] = _snippet(b["description"], 600)
+            businesses[b["code"]] = _snippet(clean_business(b["description"]), 340)
         for p in conn.execute(
                 f"SELECT code, date, close, mktcap FROM prices WHERE code IN ({ph})",
                 codes):
@@ -457,7 +452,7 @@ def generate(conn, top: int) -> Optional[Path]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--top", type=int, default=100)
+    ap.add_argument("--top", type=int, default=300)
     args = ap.parse_args()
     # 生成できなかったら非ゼロ終了(daily.shが古いページを再公開しないためのゲート)
     if generate(get_conn(), args.top) is None:
