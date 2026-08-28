@@ -6,7 +6,8 @@ from unittest import mock
 
 from src import report
 from src.db import get_conn
-from src.fetch_prices import from_jquants_code, parse_daily_quotes, to_jquants_code
+from src.fetch_prices import (_redacted, from_jquants_code, parse_daily_quotes,
+                              to_jquants_code)
 
 
 def _seed(conn):
@@ -109,6 +110,12 @@ class TestJquantsHelpers(unittest.TestCase):
         self.assertEqual(to_jquants_code("130A"), "130A0")
         self.assertEqual(from_jquants_code("72030"), "7203")
         self.assertEqual(from_jquants_code("130A0"), "130A")
+
+    def test_error_redacts_refresh_token(self):
+        # 認証エラーの例外文字列にrefreshtokenが残らないこと(daily.logに出るため)
+        msg = "401 for url: https://api.jquants.com/v1/token/auth_refresh?refreshtoken=SECRET.TOKEN-123"
+        self.assertNotIn("SECRET", _redacted(msg))
+        self.assertIn("refreshtoken=***", _redacted(msg))
 
     def test_parse_daily_quotes(self):
         payload = {"daily_quotes": [

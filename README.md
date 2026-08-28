@@ -30,8 +30,9 @@ IR BANKは個人運営サイトなので、リクエスト間スリープ+連絡
 .venv/bin/python -m src.fetch_edinet --days 400   # 2. 有報5年分を取得(初回は約2時間)
 .venv/bin/python -m src.screen --stats            # 3. 指標の分布を見る(基準の感触を掴む)
 .venv/bin/python -m src.screen                    # 4. スクリーニング実行(結果はDBにも保存)
-.venv/bin/python -m src.notify                    # 5. 今日の1銘柄を通知(LINE or 標準出力)
-.venv/bin/python -m src.report                    # 6. 結果ページ生成(data/site/index.html)
+.venv/bin/python -m src.fetch_prices              # 5. 終値取得(J-Quants設定時のみ。時価総額用)
+.venv/bin/python -m src.notify                    # 6. 今日の1銘柄を通知(LINE or 標準出力)
+.venv/bin/python -m src.report                    # 7. 結果ページ生成(data/site/index.html)
 ```
 
 IR BANK版の取得(`src.fetch_irbank`)は業績予想と大株主の半期履歴の補完用。EDINET取り込み済みの銘柄では財務CSVを自動でスキップする。

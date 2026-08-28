@@ -376,7 +376,7 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
 <div class="wrap">
 <header>
 <h1>kabu-screener</h1>
-<p class="sub">{_esc(run_date)} 実行 ・ 候補 {stats["candidates"]:,}社 / 上場 {stats["companies"]:,}社 ・ {price_note}</p>
+<p class="sub">{_esc(run_date)} 実行 ・ 候補 {stats["candidates"]:,}社 / 上場 {stats["companies"]:,}社 ・ {_esc(price_note)}</p>
 </header>
 {_logic_html()}
 {_tabs_html(rows)}

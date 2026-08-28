@@ -13,6 +13,7 @@
   .venv/bin/python -m src.fetch_prices
 """
 import os
+import re
 import sys
 import time
 from datetime import date, timedelta
@@ -24,6 +25,14 @@ from .db import get_conn
 
 API = "https://api.jquants.com/v1"
 FREE_PLAN_DELAY_DAYS = 12 * 7   # 無料プランの遅延(12週)
+
+# requests例外の文字列には refreshtoken 入りの完全URLが含まれうるため、
+# ログ・端末に出す前に必ず伏せる(fetch_edinetのAPIキーと同じ扱い)
+_TOKEN_RE = re.compile(r"(refreshtoken=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def _redacted(err: object) -> str:
+    return _TOKEN_RE.sub(r"\1***", str(err))
 
 
 def to_jquants_code(code: str) -> str:
@@ -88,7 +97,7 @@ def main():
     try:
         id_token = get_id_token(session, mail, password)
     except requests.RequestException as e:
-        sys.exit(f"J-Quants認証失敗: {e}")
+        sys.exit(f"J-Quants認証失敗: {_redacted(e)}")
 
     # 遅延ぶんを引いた日から過去へ、データのある営業日を探す(最大10日)
     day = date.today() - timedelta(days=FREE_PLAN_DELAY_DAYS)
@@ -96,7 +105,7 @@ def main():
         try:
             quotes = fetch_day(session, id_token, day)
         except requests.RequestException as e:
-            sys.exit(f"daily_quotes取得失敗({day}): {e}")
+            sys.exit(f"daily_quotes取得失敗({day}): {_redacted(e)}")
         if quotes:
             break
         day -= timedelta(days=1)
