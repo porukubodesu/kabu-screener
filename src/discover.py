@@ -80,6 +80,7 @@ def generate(conn, top: int):
         f'判定は保守的(明確な場合のみ除外)で、見逃しはあり得る。'
         f'② 営業CFのハードフィルタは<b>掛けない</b> — 先行投資期の赤字を許容する。'
         f'③ スコアは全上場企業内パーセンタイルの加重平均 — {weights}。')
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
     out = SITE_DIR / "discover.html"
     out.write_text(build_page_html(
         rows, data,
