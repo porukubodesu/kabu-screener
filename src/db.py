@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS prices (
     fetched_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS price_bars (
+    code  TEXT NOT NULL,
+    date  TEXT NOT NULL,           -- 'YYYY-MM-DD'
+    open  REAL, high REAL, low REAL, close REAL,   -- 調整後
+    PRIMARY KEY (code, date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_holders_code ON holders(code, as_of);
 CREATE INDEX IF NOT EXISTS idx_financials_code ON financials(code);
 """

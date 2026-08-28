@@ -36,20 +36,24 @@ def from_jquants_code(jq_code: str) -> str:
     return jq_code[:-1] if len(jq_code) == 5 and jq_code.endswith("0") else jq_code
 
 
-def parse_daily_bars(payload: dict) -> Dict[str, Tuple[float, Optional[float]]]:
-    """bars/dailyレスポンスを {code: (調整後終値, 時価総額[円])} にする。
+def parse_daily_bars(payload: dict) -> Dict[str, tuple]:
+    """bars/dailyレスポンスを {code: (終値, 時価総額[円], 始値, 高値, 安値)} にする。
 
-    MktCapは百万円単位で来るので円に揃える(financialsと同じ単位)。
+    値は調整後(Adj系)を優先。MktCapは百万円単位で来るので円に揃える。
     """
-    out: Dict[str, Tuple[float, Optional[float]]] = {}
+    out: Dict[str, tuple] = {}
     for q in payload.get("data", []):
         code = q.get("Code")
         close = q.get("AdjC") if q.get("AdjC") is not None else q.get("C")
         if not code or close is None:
             continue
         mktcap = q.get("MktCap")
+        o = q.get("AdjO") if q.get("AdjO") is not None else q.get("O")
+        h = q.get("AdjH") if q.get("AdjH") is not None else q.get("H")
+        l = q.get("AdjL") if q.get("AdjL") is not None else q.get("L")
         out[from_jquants_code(str(code))] = (
-            float(close), float(mktcap) * 1e6 if mktcap is not None else None)
+            float(close), float(mktcap) * 1e6 if mktcap is not None else None,
+            o, h, l)
     return out
 
 
@@ -70,6 +74,90 @@ def fetch_day(session: requests.Session, api_key: str,
         key = payload.get("pagination_key")
         if not key:
             return quotes
+
+
+BACKFILL_SLEEP = 6.0    # 銘柄別バックフィルの間隔(無料プランのレート制限対策)
+RATE_LIMIT_WAIT = 60.0  # 429時の待機
+
+
+def _get_with_backoff(session, params: Dict, api_key: str):
+    """429はレート制限なので待って再試行する(最大4回)。"""
+    for attempt in range(4):
+        r = session.get(f"{API}/equities/bars/daily", params=params,
+                        headers={"x-api-key": api_key}, timeout=60)
+        if r.status_code == 429:
+            time.sleep(RATE_LIMIT_WAIT * (attempt + 1))
+            continue
+        r.raise_for_status()
+        return r
+    raise requests.RequestException("rate limited repeatedly (429)")
+
+
+def parse_bars(payload: dict):
+    """bars/dailyレスポンスから日足(調整後OHLC)のリストを返す。"""
+    out = []
+    for q in payload.get("data", []):
+        d = q.get("Date")
+        o, h, l, c = (q.get("AdjO"), q.get("AdjH"), q.get("AdjL"), q.get("AdjC"))
+        if c is None:
+            o, h, l, c = (q.get("O"), q.get("H"), q.get("L"), q.get("C"))
+        if d and c is not None:
+            out.append((d, o, h, l, c))
+    return out
+
+
+def fetch_code_bars(session, api_key: str, code: str, frm: date, to: date):
+    """1銘柄の日足履歴(調整後)。ページネーション対応。"""
+    bars = []
+    key: Optional[str] = None
+    while True:
+        params = {"code": to_jquants_code(code),
+                  "from": frm.strftime("%Y%m%d"), "to": to.strftime("%Y%m%d")}
+        if key:
+            params["pagination_key"] = key
+        payload = _get_with_backoff(session, params, api_key).json()
+        bars.extend(parse_bars(payload))
+        key = payload.get("pagination_key")
+        if not key:
+            return bars
+
+
+def backfill_bars(conn, session, api_key: str, latest: date, top: int) -> None:
+    """月足チャート用の過去2年ぶんを、履歴の無い銘柄だけ銘柄別に取得する。
+
+    日々の新しい日足は main() が全銘柄一括(date指定)で追記するので、
+    ここに来るのは表示上位に新しく入った銘柄などの初回だけ。無料プランの
+    レート制限が厳しいため、間隔を空けて淡々と回す(429は待って再試行)。
+    """
+    horizon = (latest - timedelta(days=365 * 2 - 45)).isoformat()
+    codes = [c for c in target_codes(conn, top)
+             if (conn.execute("SELECT MIN(date) FROM price_bars WHERE code = ?",
+                              (c,)).fetchone()[0] or "9999") > horizon]
+    fetched = 0
+    for code in codes:
+        try:
+            bars = fetch_code_bars(session, api_key, code,
+                                   latest - timedelta(days=365 * 2), latest)
+        except requests.RequestException as e:
+            print(f"  [warn] 日足取得失敗({code}): {e}")
+            continue
+        with conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO price_bars(code, date, open, high, low, close)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                [(code, d, o, h, l, c) for d, o, h, l, c in bars])
+        fetched += 1
+        time.sleep(BACKFILL_SLEEP)
+    print(f"日足バックフィル: {fetched}/{len(codes)}銘柄")
+
+
+def target_codes(conn, limit: int):
+    run_date = conn.execute("SELECT MAX(run_date) FROM screen_results").fetchone()[0]
+    if not run_date:
+        return []
+    return [r["code"] for r in conn.execute(
+        "SELECT code FROM screen_results WHERE run_date = ? ORDER BY rank LIMIT ?",
+        (run_date, limit))]
 
 
 def main():
@@ -96,12 +184,20 @@ def main():
         sys.exit("直近10日分に株価データが見つかりません")
 
     now = datetime.now().isoformat(timespec="seconds")
+    d = day.isoformat()
     with conn:
-        for code, (close, mktcap) in quotes.items():
+        for code, (close, mktcap, o, h, l) in quotes.items():
             conn.execute(
                 "INSERT OR REPLACE INTO prices(code, date, close, mktcap, fetched_at)"
-                " VALUES (?, ?, ?, ?, ?)", (code, day.isoformat(), close, mktcap, now))
+                " VALUES (?, ?, ?, ?, ?)", (code, d, close, mktcap, now))
+            # 同じレスポンスから日足も貯める(追加リクエストなしで履歴が伸びる)
+            conn.execute(
+                "INSERT OR REPLACE INTO price_bars(code, date, open, high, low, close)"
+                " VALUES (?, ?, ?, ?, ?, ?)", (code, d, o, h, l, close))
     print(f"終値・時価総額取得: {len(quotes)}銘柄 ({day} 時点、無料プランは12週遅延)")
+
+    # 月足チャート用の過去2年バックフィル(履歴の無い表示上位銘柄のみ)
+    backfill_bars(conn, session, api_key, day, top=300)
 
 
 if __name__ == "__main__":

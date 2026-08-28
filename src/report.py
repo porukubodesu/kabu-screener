@@ -7,9 +7,9 @@ daily.sh がこれを site ブランチに載せてGitHub Pagesで公開する�
 - ヒーローヘッダ+ロジック説明(screen.pyの定数から動的生成)
 - 業種タブ(クリックで絞り込み)
 - カード一覧(クリック不要で全情報をそのまま表示):
-  スコア・時価総額・直近業績・指標チップ・事業内容・決算推移(表+ミニバー)・大株主。
-  月足チャート(TradingView埋め込み)だけはボタン押下時にロード(全カード分の
-  自動ロードは重すぎるため)
+  スコア・時価総額・直近業績・指標チップ・事業内容・決算推移(表+ミニバー)・
+  月足キャンドル(J-Quants日足を月次集約した自前SVG)・大株主。
+  ※TradingView埋め込みは東証データをライセンス配信していないためリンクのみ
 
 使い方:
   .venv/bin/python -m src.report            # 最新のscreen_resultsから生成
@@ -132,19 +132,15 @@ details.logic .box {
 .sl { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
 .sparks { display: flex; gap: 20px; }
 svg.spark rect { fill: var(--accent); }
+svg.candles line.wick { stroke: var(--muted); stroke-width: 1; }
+svg.candles rect.up { fill: var(--accent); }
+svg.candles rect.down { fill: var(--muted); }
 .cowners { color: var(--muted); font-size: 12px; margin-top: 12px; }
 .cowners b { color: var(--ink-2); font-weight: 500; }
 .cfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px;
   border-top: 1px solid var(--grid); padding-top: 10px; }
 .cfoot a { color: var(--muted); font-size: 12px; }
 .cfoot a:hover { color: var(--accent); }
-button.loadchart {
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--surface); color: var(--ink-2); font-size: 12px;
-  padding: 4px 14px; cursor: pointer;
-}
-button.loadchart:hover { border-color: var(--accent); color: var(--accent); }
-iframe.tvchart { width: 100%; height: 420px; border: 0; margin-top: 10px; border-radius: 12px; }
 footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
 """
 
@@ -157,21 +153,6 @@ tabs.forEach(function (t) {
     document.querySelectorAll(".card").forEach(function (c) {
       c.hidden = !!s && c.dataset.sector !== s;
     });
-  });
-});
-document.querySelectorAll("button.loadchart").forEach(function (b) {
-  b.addEventListener("click", function () {
-    var dark = matchMedia("(prefers-color-scheme: dark)").matches;
-    var f = document.createElement("iframe");
-    f.className = "tvchart";
-    f.loading = "lazy";
-    f.src = "https://s.tradingview.com/widgetembed/?symbol=TSE%3A" +
-      encodeURIComponent(b.dataset.code) +
-      "&interval=M&style=1&locale=ja&timezone=Asia%2FTokyo" +
-      "&hidesidetoolbar=1&symboledit=0&saveimage=0&withdateranges=1" +
-      "&theme=" + (dark ? "dark" : "light");
-    b.parentElement.after(f);
-    b.remove();
   });
 });
 """
@@ -249,6 +230,53 @@ def _bars_svg(fin_rows, key: str) -> str:
             f'stroke="var(--grid)" stroke-width="1"/>{"".join(rects)}</svg>')
 
 
+def monthly_candles(bars):
+    """日足[(date,o,h,l,c)...] を月足に集約して [(YYYY-MM, o,h,l,c)...] を返す。"""
+    months: Dict[str, list] = {}
+    for d, o, h, l, c in bars:
+        months.setdefault(d[:7], []).append((d, o, h, l, c))
+    out = []
+    for ym in sorted(months):
+        rows = sorted(months[ym])
+        o = next((r[1] for r in rows if r[1] is not None), None)
+        c = next((r[4] for r in reversed(rows) if r[4] is not None), None)
+        highs = [r[2] for r in rows if r[2] is not None]
+        lows = [r[3] for r in rows if r[3] is not None]
+        if o is None or c is None or not highs or not lows:
+            continue
+        out.append((ym, o, max(highs), min(lows), c))
+    return out
+
+
+def _candles_svg(monthly) -> str:
+    """月足キャンドル(陽線=アクセント、陰線=グレー。符号は塗りの濃淡でも判別可)。"""
+    monthly = monthly[-24:]
+    if len(monthly) < 3:
+        return ""
+    hi = max(m[2] for m in monthly)
+    lo = min(m[3] for m in monthly)
+    span = (hi - lo) or 1
+    w, gap, h = 6, 2, 64
+    def y(v):
+        return round((hi - v) / span * (h - 4) + 2, 1)
+    parts = []
+    x = 0
+    for ym, o, hh, ll, c in monthly:
+        cx = x + w / 2
+        top, bottom = min(y(o), y(c)), max(y(o), y(c))
+        body_h = max(bottom - top, 1)
+        cls = "up" if c >= o else "down"
+        parts.append(
+            f'<g><title>{_esc(ym)}: 始{o:,.0f} 高{hh:,.0f} 安{ll:,.0f} 終{c:,.0f}</title>'
+            f'<line class="wick" x1="{cx}" x2="{cx}" y1="{y(hh)}" y2="{y(ll)}"/>'
+            f'<rect class="{cls}" x="{x}" y="{top}" width="{w}" height="{body_h}" rx="1"/></g>')
+        x += w + gap
+    total = x - gap
+    return (f'<div><div class="sl">月足{len(monthly)}ヶ月(12週遅延)</div>'
+            f'<svg class="candles" width="{total}" height="{h}" '
+            f'viewBox="0 0 {total} {h}" role="img">{"".join(parts)}</svg></div>')
+
+
 def _fin_table_html(fin_rows) -> str:
     if not fin_rows:
         return ""
@@ -266,7 +294,8 @@ def _fin_table_html(fin_rows) -> str:
 
 
 def _card_html(r, m: Dict, fin_rows, biz: Optional[str],
-               close: Optional[float], mktcap: Optional[float]) -> str:
+               close: Optional[float], mktcap: Optional[float],
+               bars=()) -> str:
     code, sector = r["code"], r["sector33"] or r["market"]
     # 時価総額はJ-Quantsの公式値を優先、無ければ終値×推定株式数で概算
     mcap = mktcap
@@ -294,10 +323,12 @@ def _card_html(r, m: Dict, fin_rows, biz: Optional[str],
     biz_html = f'<p class="cbiz">{_esc(biz)}</p>' if biz else ""
     sparks = ""
     rev_s, op_s = _bars_svg(fin_rows, "revenue"), _bars_svg(fin_rows, "op_income")
-    if rev_s or op_s:
+    candle_s = _candles_svg(monthly_candles(bars)) if bars else ""
+    if rev_s or op_s or candle_s:
         sparks = ('<div class="sparks">'
                   + (f'<div><div class="sl">売上</div>{rev_s}</div>' if rev_s else "")
                   + (f'<div><div class="sl">営業利益</div>{op_s}</div>' if op_s else "")
+                  + candle_s
                   + "</div>")
     c = _esc(code)
     return f"""<article class="card" data-sector="{_esc(sector)}">
@@ -313,7 +344,6 @@ def _card_html(r, m: Dict, fin_rows, biz: Optional[str],
 <div class="cgrid">{_fin_table_html(fin_rows)}{sparks}</div>
 <div class="cowners"><b>オーナー</b> {owners}{vc_line} ・ 時点 {_esc(m.get("holder_as_of") or "-")}</div>
 <div class="cfoot">
-<button class="loadchart" data-code="{c}">📈 月足チャート</button>
 <a href="https://irbank.net/{c}" target="_blank" rel="noopener">IR BANK</a>
 <a href="https://kabutan.jp/stock/?code={c}" target="_blank" rel="noopener">株探</a>
 <a href="https://www.tradingview.com/chart/?symbol=TSE%3A{c}" target="_blank" rel="noopener">TradingView</a>
@@ -357,15 +387,18 @@ def _tabs_html(rows) -> str:
 
 def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
                businesses: Optional[Dict] = None,
-               prices: Optional[Dict] = None) -> str:
+               prices: Optional[Dict] = None,
+               bars: Optional[Dict] = None) -> str:
     fins = fins or {}
     businesses = businesses or {}
     prices = prices or {}
+    bars = bars or {}
     cards = "\n".join(
         _card_html(r, json.loads(r["metrics_json"]), fins.get(r["code"], ()),
                    businesses.get(r["code"]),
                    prices.get(r["code"], (None, None, None))[1],
-                   prices.get(r["code"], (None, None, None))[2])
+                   prices.get(r["code"], (None, None, None))[2],
+                   bars.get(r["code"], ()))
         for r in rows)
     price_dates = sorted({v[0] for v in prices.values()}) if prices else []
     price_note = f"終値 {price_dates[-1]} 時点" if price_dates else "株価未取得"
@@ -426,6 +459,7 @@ def generate(conn, top: int) -> Optional[Path]:
     fins: Dict[str, list] = {c: [] for c in codes}
     businesses: Dict[str, str] = {}
     prices: Dict[str, tuple] = {}
+    bars: Dict[str, list] = {}
     if codes:
         ph = ",".join("?" * len(codes))
         for f in conn.execute(
@@ -441,10 +475,15 @@ def generate(conn, top: int) -> Optional[Path]:
                 f"SELECT code, date, close, mktcap FROM prices WHERE code IN ({ph})",
                 codes):
             prices[p["code"]] = (p["date"], p["close"], p["mktcap"])
+        for b in conn.execute(
+                f"""SELECT code, date, open, high, low, close FROM price_bars
+                    WHERE code IN ({ph}) ORDER BY code, date""", codes):
+            bars.setdefault(b["code"], []).append(
+                (b["date"], b["open"], b["high"], b["low"], b["close"]))
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     out = SITE_DIR / "index.html"
     out.write_text(
-        build_html(run_date, rows, stats, fins, businesses, prices),
+        build_html(run_date, rows, stats, fins, businesses, prices, bars),
         encoding="utf-8")
     print(f"{out} を生成しました({run_date}, {len(rows)}行)")
     return out

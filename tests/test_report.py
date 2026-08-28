@@ -37,6 +37,12 @@ def _seed(conn):
     # 7203はmktcap無し(推定計算のフォールバック)、9984は公式mktcapあり
     conn.execute("INSERT INTO prices VALUES ('7203', '2026-08-27', 3000.0, NULL, '2026-08-28T07:00:00')")
     conn.execute("INSERT INTO prices VALUES ('9984', '2026-08-27', 100.0, 4500000000000.0, '2026-08-28T07:00:00')")
+    for d, o, h, l, c in [("2026-04-01", 2500, 2600, 2450, 2550),
+                          ("2026-04-15", 2550, 2700, 2540, 2680),
+                          ("2026-05-10", 2680, 2750, 2600, 2620),
+                          ("2026-06-05", 2620, 2900, 2610, 2850)]:
+        conn.execute("INSERT INTO price_bars VALUES ('7203', ?, ?, ?, ?, ?)",
+                     (d, o, h, l, c))
 
 
 class TestReport(unittest.TestCase):
@@ -106,10 +112,17 @@ class TestReport(unittest.TestCase):
         self.assertIn("4.50兆", self.html)
         self.assertIn("終値 2026-08-27 時点", self.html)
 
-    def test_chart_button_and_business_panel(self):
-        self.assertIn('data-code="7203"', self.html)
-        self.assertIn("月足チャート", self.html)
+    def test_candles_and_business(self):
+        self.assertIn('class="candles"', self.html)     # 月足キャンドルSVG
+        self.assertIn("月足3ヶ月", self.html)           # 4月・5月・6月の3本
         self.assertIn("自動車事業を中心に", self.html)   # businessテーブル由来の全文スニペット
+
+    def test_monthly_aggregation(self):
+        from src.report import monthly_candles
+        m = monthly_candles([("2026-04-01", 2500, 2600, 2450, 2550),
+                             ("2026-04-15", 2550, 2700, 2540, 2680)])
+        # 始値=月初、高値=最大、安値=最小、終値=月末
+        self.assertEqual(m, [("2026-04", 2500, 2700, 2450, 2680)])
 
     def test_empty_results_returns_none(self):
         conn = get_conn(":memory:")
@@ -126,13 +139,15 @@ class TestJquantsHelpers(unittest.TestCase):
 
     def test_parse_daily_bars(self):
         payload = {"data": [
-            {"Code": "72030", "C": 2850.0, "AdjC": 2850.0, "MktCap": 45015714.0},
+            {"Code": "72030", "C": 2850.0, "AdjC": 2850.0, "MktCap": 45015714.0,
+             "AdjO": 2872.0, "AdjH": 2885.5, "AdjL": 2837.0},
             {"Code": "130A0", "C": 500.0, "AdjC": None, "MktCap": None},  # 調整値なし→C
             {"Code": "99840", "C": None, "AdjC": None},                   # 値なし→捨てる
         ]}
         q = parse_daily_bars(payload)
-        self.assertEqual(q["7203"], (2850.0, 45015714.0 * 1e6))  # MktCapは百万円→円
-        self.assertEqual(q["130A"], (500.0, None))
+        # (終値, 時価総額[百万円→円], 始値, 高値, 安値)
+        self.assertEqual(q["7203"], (2850.0, 45015714.0 * 1e6, 2872.0, 2885.5, 2837.0))
+        self.assertEqual(q["130A"][:2], (500.0, None))
         self.assertNotIn("9984", q)
 
 
