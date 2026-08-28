@@ -6,8 +6,7 @@ from unittest import mock
 
 from src import report
 from src.db import get_conn
-from src.fetch_prices import (_redacted, from_jquants_code, parse_daily_quotes,
-                              to_jquants_code)
+from src.fetch_prices import from_jquants_code, parse_daily_bars, to_jquants_code
 
 
 def _seed(conn):
@@ -35,7 +34,9 @@ def _seed(conn):
                  " VALUES ('7203','2027/03', 1, 'irbank', 52000000000000)")
     conn.execute("INSERT INTO business VALUES ('7203', '3 【事業の内容】自動車事業を中心に'"
                  " || 'ロングテキスト' , '2026-03-31', '2026-08-22')")
-    conn.execute("INSERT INTO prices VALUES ('7203', '2026-08-27', 3000.0, '2026-08-28T07:00:00')")
+    # 7203はmktcap無し(推定計算のフォールバック)、9984は公式mktcapあり
+    conn.execute("INSERT INTO prices VALUES ('7203', '2026-08-27', 3000.0, NULL, '2026-08-28T07:00:00')")
+    conn.execute("INSERT INTO prices VALUES ('9984', '2026-08-27', 100.0, 4500000000000.0, '2026-08-28T07:00:00')")
 
 
 class TestReport(unittest.TestCase):
@@ -89,8 +90,10 @@ class TestReport(unittest.TestCase):
         self.assertIn('data-sector="プライム"', self.html)
 
     def test_market_cap_from_price_and_shares(self):
-        # 株式数 = 純資産1e12/BPS1000 = 1e9株、終値3000円 → 時価総額3.00兆
+        # mktcap無し: 株式数 = 純資産1e12/BPS1000 = 1e9株、終値3000円 → 3.00兆
         self.assertIn("3.00兆", self.html)
+        # mktcapあり: 公式値4.5e12をそのまま使う
+        self.assertIn("4.50兆", self.html)
         self.assertIn("終値 2026-08-27 時点", self.html)
 
     def test_chart_button_and_business_panel(self):
@@ -111,21 +114,15 @@ class TestJquantsHelpers(unittest.TestCase):
         self.assertEqual(from_jquants_code("72030"), "7203")
         self.assertEqual(from_jquants_code("130A0"), "130A")
 
-    def test_error_redacts_refresh_token(self):
-        # 認証エラーの例外文字列にrefreshtokenが残らないこと(daily.logに出るため)
-        msg = "401 for url: https://api.jquants.com/v1/token/auth_refresh?refreshtoken=SECRET.TOKEN-123"
-        self.assertNotIn("SECRET", _redacted(msg))
-        self.assertIn("refreshtoken=***", _redacted(msg))
-
-    def test_parse_daily_quotes(self):
-        payload = {"daily_quotes": [
-            {"Code": "72030", "Close": 3000.0, "AdjustmentClose": 3061.5},
-            {"Code": "130A0", "Close": 500.0, "AdjustmentClose": None},  # 調整値なし→Close
-            {"Code": "99840", "Close": None, "AdjustmentClose": None},   # 値なし→捨てる
+    def test_parse_daily_bars(self):
+        payload = {"data": [
+            {"Code": "72030", "C": 2850.0, "AdjC": 2850.0, "MktCap": 45015714.0},
+            {"Code": "130A0", "C": 500.0, "AdjC": None, "MktCap": None},  # 調整値なし→C
+            {"Code": "99840", "C": None, "AdjC": None},                   # 値なし→捨てる
         ]}
-        q = parse_daily_quotes(payload)
-        self.assertEqual(q["7203"], 3061.5)   # 調整後終値を優先
-        self.assertEqual(q["130A"], 500.0)
+        q = parse_daily_bars(payload)
+        self.assertEqual(q["7203"], (2850.0, 45015714.0 * 1e6))  # MktCapは百万円→円
+        self.assertEqual(q["130A"], (500.0, None))
         self.assertNotIn("9984", q)
 
 

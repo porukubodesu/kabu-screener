@@ -1,38 +1,30 @@
-"""J-Quants API (JPX公式) から終値を取り、時価総額の概算表示に使う。
+"""J-Quants API v2 (JPX公式) から終値と時価総額を取る。
 
+/v2/equities/bars/daily は date指定で全上場銘柄の四本値+時価総額(MktCap、百万円)を
+返すため、遅延を考慮した直近の営業日を探して数リクエストで全銘柄分を保存する。
 無料プランは12週遅延だが、時価総額の桁感の把握には十分。
-/prices/daily_quotes は date指定で全上場銘柄を1リクエストで返すため、
-遅延を考慮した直近の営業日を探して1〜数リクエストで全銘柄分を保存する。
 
 必要な環境変数(.envに置く):
-  JQUANTS_MAIL / JQUANTS_PASSWORD   # https://jpx-jquants.com/ の無料登録アカウント
+  JQUANTS_API_KEY   # https://jpx-jquants.com/ で無料登録 → ダッシュボードで発行
 
 未設定なら何もせず正常終了する(daily.shを止めない)。
+認証はヘッダ(x-api-key)なので、例外メッセージのURLにキーが混ざる漏えい経路はない。
 
 使い方:
   .venv/bin/python -m src.fetch_prices
 """
 import os
-import re
 import sys
 import time
-from datetime import date, timedelta
-from typing import Dict, List, Optional
+from datetime import date, datetime, timedelta
+from typing import Dict, Optional, Tuple
 
 import requests
 
 from .db import get_conn
 
-API = "https://api.jquants.com/v1"
+API = "https://api.jquants.com/v2"
 FREE_PLAN_DELAY_DAYS = 12 * 7   # 無料プランの遅延(12週)
-
-# requests例外の文字列には refreshtoken 入りの完全URLが含まれうるため、
-# ログ・端末に出す前に必ず伏せる(fetch_edinetのAPIキーと同じ扱い)
-_TOKEN_RE = re.compile(r"(refreshtoken=)[^&\s'\"]+", re.IGNORECASE)
-
-
-def _redacted(err: object) -> str:
-    return _TOKEN_RE.sub(r"\1***", str(err))
 
 
 def to_jquants_code(code: str) -> str:
@@ -44,68 +36,58 @@ def from_jquants_code(jq_code: str) -> str:
     return jq_code[:-1] if len(jq_code) == 5 and jq_code.endswith("0") else jq_code
 
 
-def parse_daily_quotes(payload: dict) -> Dict[str, float]:
-    """daily_quotesレスポンスを {code: 調整後終値} にする。"""
-    out: Dict[str, float] = {}
-    for q in payload.get("daily_quotes", []):
-        close = q.get("AdjustmentClose") or q.get("Close")
+def parse_daily_bars(payload: dict) -> Dict[str, Tuple[float, Optional[float]]]:
+    """bars/dailyレスポンスを {code: (調整後終値, 時価総額[円])} にする。
+
+    MktCapは百万円単位で来るので円に揃える(financialsと同じ単位)。
+    """
+    out: Dict[str, Tuple[float, Optional[float]]] = {}
+    for q in payload.get("data", []):
         code = q.get("Code")
-        if close is None or not code:
+        close = q.get("AdjC") if q.get("AdjC") is not None else q.get("C")
+        if not code or close is None:
             continue
-        out[from_jquants_code(str(code))] = float(close)
+        mktcap = q.get("MktCap")
+        out[from_jquants_code(str(code))] = (
+            float(close), float(mktcap) * 1e6 if mktcap is not None else None)
     return out
 
 
-def get_id_token(session: requests.Session, mail: str, password: str) -> str:
-    r = session.post(f"{API}/token/auth_user",
-                     json={"mailaddress": mail, "password": password}, timeout=30)
-    r.raise_for_status()
-    refresh = r.json()["refreshToken"]
-    r = session.post(f"{API}/token/auth_refresh",
-                     params={"refreshtoken": refresh}, timeout=30)
-    r.raise_for_status()
-    return r.json()["idToken"]
-
-
-def fetch_day(session: requests.Session, id_token: str, day: date) -> Dict[str, float]:
-    """指定日の全銘柄終値。ページネーション対応。データが無い日(休日)は空dict。"""
-    quotes: Dict[str, float] = {}
+def fetch_day(session: requests.Session, api_key: str,
+              day: date) -> Dict[str, Tuple[float, Optional[float]]]:
+    """指定日の全銘柄分。ページネーション対応。データが無い日(休日)は空dict。"""
+    quotes: Dict[str, Tuple[float, Optional[float]]] = {}
     key: Optional[str] = None
     while True:
         params = {"date": day.strftime("%Y%m%d")}
         if key:
             params["pagination_key"] = key
-        r = session.get(f"{API}/prices/daily_quotes", params=params,
-                        headers={"Authorization": f"Bearer {id_token}"}, timeout=60)
+        r = session.get(f"{API}/equities/bars/daily", params=params,
+                        headers={"x-api-key": api_key}, timeout=60)
         r.raise_for_status()
         payload = r.json()
-        quotes.update(parse_daily_quotes(payload))
+        quotes.update(parse_daily_bars(payload))
         key = payload.get("pagination_key")
         if not key:
             return quotes
 
 
 def main():
-    mail = os.environ.get("JQUANTS_MAIL")
-    password = os.environ.get("JQUANTS_PASSWORD")
-    if not mail or not password:
-        print("JQUANTS_MAIL / JQUANTS_PASSWORD 未設定のため株価取得をスキップ"
+    api_key = os.environ.get("JQUANTS_API_KEY")
+    if not api_key:
+        print("JQUANTS_API_KEY 未設定のため株価取得をスキップ"
               "(https://jpx-jquants.com/ で無料登録 → .env に追記)")
         return
     conn = get_conn()
     session = requests.Session()
-    try:
-        id_token = get_id_token(session, mail, password)
-    except requests.RequestException as e:
-        sys.exit(f"J-Quants認証失敗: {_redacted(e)}")
 
     # 遅延ぶんを引いた日から過去へ、データのある営業日を探す(最大10日)
     day = date.today() - timedelta(days=FREE_PLAN_DELAY_DAYS)
     for _ in range(10):
         try:
-            quotes = fetch_day(session, id_token, day)
+            quotes = fetch_day(session, api_key, day)
         except requests.RequestException as e:
-            sys.exit(f"daily_quotes取得失敗({day}): {_redacted(e)}")
+            sys.exit(f"bars/daily取得失敗({day}): {e}")
         if quotes:
             break
         day -= timedelta(days=1)
@@ -113,14 +95,13 @@ def main():
     else:
         sys.exit("直近10日分に株価データが見つかりません")
 
-    from datetime import datetime
     now = datetime.now().isoformat(timespec="seconds")
     with conn:
-        for code, close in quotes.items():
+        for code, (close, mktcap) in quotes.items():
             conn.execute(
-                "INSERT OR REPLACE INTO prices(code, date, close, fetched_at)"
-                " VALUES (?, ?, ?, ?)", (code, day.isoformat(), close, now))
-    print(f"終値取得: {len(quotes)}銘柄 ({day} 時点、無料プランは12週遅延)")
+                "INSERT OR REPLACE INTO prices(code, date, close, mktcap, fetched_at)"
+                " VALUES (?, ?, ?, ?, ?)", (code, day.isoformat(), close, mktcap, now))
+    print(f"終値・時価総額取得: {len(quotes)}銘柄 ({day} 時点、無料プランは12週遅延)")
 
 
 if __name__ == "__main__":

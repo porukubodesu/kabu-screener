@@ -295,10 +295,13 @@ def _panel_html(code: str, m: Dict, fin_rows, biz_full: Optional[str]) -> str:
 
 
 def _row_html(r, m: Dict, fin_rows, biz_full: Optional[str],
-              close: Optional[float]) -> str:
+              close: Optional[float], mktcap: Optional[float]) -> str:
     code, sector = r["code"], r["sector33"] or r["market"]
-    shares = _shares(fin_rows)
-    mcap = close * shares if (close and shares) else None
+    # 時価総額はJ-Quantsの公式値を優先、無ければ終値×推定株式数で概算
+    mcap = mktcap
+    if mcap is None:
+        shares = _shares(fin_rows)
+        mcap = close * shares if (close and shares) else None
     top_owner = (m.get("owner_names") or ["-"])[0]
     vc = '<span class="vcchip">VC</span>' if m.get("has_vc") else ""
     biz_line = (f'<div class="biz">{_esc(m.get("business"))}</div>'
@@ -359,9 +362,10 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
     body_rows = "\n".join(
         _row_html(r, json.loads(r["metrics_json"]), fins.get(r["code"], ()),
                   businesses.get(r["code"]),
-                  prices.get(r["code"], (None, None))[1])
+                  prices.get(r["code"], (None, None, None))[1],
+                  prices.get(r["code"], (None, None, None))[2])
         for r in rows)
-    price_dates = sorted({d for d, _ in prices.values()}) if prices else []
+    price_dates = sorted({v[0] for v in prices.values()}) if prices else []
     price_note = f"終値 {price_dates[-1]} 時点" if price_dates else "株価未取得"
 
     return f"""<!DOCTYPE html>
@@ -394,8 +398,8 @@ def build_html(run_date: str, rows, stats: Dict, fins: Optional[Dict] = None,
 </table>
 </div>
 <footer>
-生成: {datetime.now().strftime("%Y-%m-%d %H:%M")} / データ: EDINET(金融庁)・IR BANK・JPX・J-Quants(終値、無料プランは12週遅延) /
-時価総額は終値×推定株式数(純資産÷BPS)の概算。スコアは全上場企業内パーセンタイルの加重平均。
+生成: {datetime.now().strftime("%Y-%m-%d %H:%M")} / データ: EDINET(金融庁)・IR BANK・JPX・J-Quants(終値・時価総額、無料プランは12週遅延) /
+スコアは全上場企業内パーセンタイルの加重平均。
 自分用スクリーナーであり投資勧誘ではない。
 </footer>
 </div>
@@ -439,8 +443,9 @@ def generate(conn, top: int) -> Optional[Path]:
                 f"SELECT code, description FROM business WHERE code IN ({ph})", codes):
             businesses[b["code"]] = _snippet(b["description"], 600)
         for p in conn.execute(
-                f"SELECT code, date, close FROM prices WHERE code IN ({ph})", codes):
-            prices[p["code"]] = (p["date"], p["close"])
+                f"SELECT code, date, close, mktcap FROM prices WHERE code IN ({ph})",
+                codes):
+            prices[p["code"]] = (p["date"], p["close"], p["mktcap"])
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     out = SITE_DIR / "index.html"
     out.write_text(

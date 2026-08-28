@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS screen_results (
 CREATE TABLE IF NOT EXISTS prices (
     code       TEXT PRIMARY KEY,
     date       TEXT NOT NULL,      -- 終値の日付('YYYY-MM-DD')
-    close      REAL NOT NULL,      -- 終値(円)
+    close      REAL NOT NULL,      -- 調整後終値(円)
+    mktcap     REAL,               -- 時価総額(円。J-Quants MktCap由来)
     fetched_at TEXT NOT NULL
 );
 
@@ -108,6 +109,9 @@ CREATE INDEX IF NOT EXISTS idx_financials_code ON financials(code);
 
 def _migrate(conn):
     """既存DBに後から増えた列を足す(CREATE IF NOT EXISTSでは列が増えないため)。"""
+    pcols = {r[1] for r in conn.execute("PRAGMA table_info(prices)")}
+    if pcols and "mktcap" not in pcols:
+        conn.execute("ALTER TABLE prices ADD COLUMN mktcap REAL")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(financials)")}
     if "source" not in cols:
         conn.execute(
