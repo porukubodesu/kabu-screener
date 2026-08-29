@@ -144,6 +144,15 @@ class TestBusinessExtraction(unittest.TestCase):
         self.assertNotIn("ミッション", out)
         self.assertNotIn("近年", out)
 
+    def test_parenthetical_period_not_split(self):
+        # 「(以下「DX」という。)」の句点で文を割らない(「)の推進…」断片を作らない)
+        from src.report import extract_business
+        text = ("デジタルトランスフォーメーション(以下「DX」という。)の推進を"
+                "支援するサービスを提供しております。")
+        out = extract_business(text)
+        self.assertIn("(以下「DX」という。)の推進", out)
+        self.assertFalse(out.startswith(")"))
+
     def test_fallback_when_nothing_concrete(self):
         from src.report import extract_business
         text = "特筆すべき記載はありません。"
