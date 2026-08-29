@@ -198,12 +198,17 @@ class TestBusinessExtraction(unittest.TestCase):
         self.assertFalse(out.startswith(")"))
 
     def test_quoted_period_not_split(self):
-        # 「〜となる。」の鉤括弧内句点でも割らない(バイセル型)
+        # 「〜となる。」『〜。』の鉤括弧内句点でも割らない(バイセル型・yutori型)
         from src.report import extract_business
         text = ("当社は「架け橋となる。」をミッションとし、"
                 "リユースサービスを提供しております。")
         out = extract_business(text)
         self.assertTrue(out.startswith("当社は「架け橋となる。」"))
+        text2 = ("『「個の時代」の、担い手に。』を掲げ、"
+                 "インフルエンサー支援サービスを提供しております。")
+        out2 = extract_business(text2)
+        self.assertFalse(out2.startswith("』"))
+        self.assertIn("インフルエンサー支援サービス", out2)
 
     def test_fallback_when_nothing_concrete(self):
         from src.report import extract_business

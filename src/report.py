@@ -233,12 +233,12 @@ def extract_business(text: str, limit: int = 340) -> str:
     1文も拾えなければ従来どおり冒頭からのスニペットに落とす。
     """
     flat = " ".join(clean_business(text).split())
-    # 「(以下「DX」という。)」「〜となる。」のような括弧・鉤括弧内の句点では切らない
-    sentences = [s + "。" for s in re.split(r"。(?![)）」])", flat) if s.strip()]
+    # 「(以下「DX」という。)」「〜となる。」『〜。』のような括弧・鉤括弧内の句点では切らない
+    sentences = [s + "。" for s in re.split(r"。(?![)）」』])", flat) if s.strip()]
     picked: List[str] = []
     total = 0
     for s in sentences:
-        if s.lstrip("。 ").startswith((")", "）", "」")):  # 閉じ括弧始まりの断片は捨てる
+        if s.lstrip("。 ").startswith((")", "）", "」", "』")):  # 閉じ括弧始まりの断片は捨てる
             continue
         if any(n in s for n in _BIZ_NOISE_HARD):
             continue
