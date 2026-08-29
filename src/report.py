@@ -206,13 +206,12 @@ _BIZ_NOISE_SOFT = (
     "ミッション", "ビジョン", "パーパス", "経営理念", "掲げ", "スローガン",
     "バリュー", "実現したい", "目指し", "大志", "存在意義", "を企業理念",
 )
-# 「実際に何をしているか」を述べる強い動詞(終止形・連用形)
-_BIZ_STRONG = (
-    "を提供", "を運営", "を販売", "を製造", "を開発", "を展開",
-    "提供し", "運営し", "販売し", "製造し", "開発し", "展開し",
-    "を行って", "を営んで", "を手掛けて", "を手がけて",
-    "事業を", "事業は",
-)
+# 「実際に何をしているか」を述べる強い動詞。語彙の列挙では活用形
+# (を提供/提供し/提供をしています…)を拾いきれないため語幹ベースの正規表現にする
+_BIZ_STRONG_RE = re.compile(
+    r"を(?:提供|運営|販売|製造|開発|展開|行っ|営ん|手掛け|手がけ)"
+    r"|(?:提供|運営|販売|製造|開発|展開)(?:を|し)"
+    r"|事業[をは]")
 # 具体的な事業・サービスを述べる文のマーカー(当たる文だけ拾う)
 _BIZ_CONCRETE = (
     "事業を", "事業は", "事業と", "事業(", "事業」", "事業運営",
@@ -242,9 +241,9 @@ def extract_business(text: str, limit: int = 340) -> str:
             continue
         if any(n in s for n in _BIZ_NOISE_HARD):
             continue
-        if not any(c in s for c in _BIZ_CONCRETE):
+        strong = bool(_BIZ_STRONG_RE.search(s))
+        if not (strong or any(c in s for c in _BIZ_CONCRETE)):
             continue
-        strong = any(c in s for c in _BIZ_STRONG)
         # 背景系: 強い動詞があり、かつ現在形で終わる文だけ残す
         # (「〜となっていました」のような過去形は市場背景の語り)
         if any(n in s for n in _BIZ_NOISE_AMBI) and not (

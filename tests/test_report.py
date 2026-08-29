@@ -168,6 +168,13 @@ class TestBusinessExtraction(unittest.TestCase):
         self.assertNotIn("一方通行", out3)
         self.assertIn("VTuber事業", out3)
 
+    def test_sahen_and_conjugation_variants_kept(self):
+        # 「開発及び提供をしています」のようなサ変・活用違いも語幹regexで拾う
+        from src.report import extract_business
+        text = ("世界中を楽しくすることを目指し、"
+                "デジタルコンテンツの開発及び提供をしています。")
+        self.assertIn("デジタルコンテンツの開発及び提供", extract_business(text))
+
     def test_nakaguro_compound_verbs_kept(self):
         # 「製造・販売を行っております」「〜を営んで」のような汎用活動動詞も拾う
         from src.report import extract_business
