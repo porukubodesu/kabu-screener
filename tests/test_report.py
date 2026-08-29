@@ -168,6 +168,14 @@ class TestBusinessExtraction(unittest.TestCase):
         self.assertNotIn("一方通行", out3)
         self.assertIn("VTuber事業", out3)
 
+    def test_nakaguro_compound_verbs_kept(self):
+        # 「製造・販売を行っております」「〜を営んで」のような汎用活動動詞も拾う
+        from src.report import extract_business
+        self.assertIn("医療機器の製造・販売",
+                      extract_business("医療機器の製造・販売を行っております。"))
+        self.assertIn("飲食店",
+                      extract_business("直営の飲食店を営んでおります。"))
+
     def test_goal_wording_with_concrete_kept(self):
         # 「〜を目指し、◯◯サービスを提供」のような文は理念語があっても残す
         from src.report import extract_business
