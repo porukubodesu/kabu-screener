@@ -122,7 +122,8 @@ details.logic .box {
   font-size: 12px; padding: 3px 10px;
 }
 .chip b { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
-.cbiz { color: var(--ink-2); font-size: 13px; margin: 12px 0 0; }
+.csegs { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.cbiz { color: var(--ink-2); font-size: 13px; margin: 8px 0 0; }
 .cgrid { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: flex-start; margin-top: 12px; }
 .fin table { border-collapse: collapse; }
 .fin th {
@@ -184,6 +185,59 @@ def _yen(v: Optional[float]) -> str:
 def clean_business(text: str) -> str:
     """有報の見出しゴミを落として本文から始める。"""
     return _BIZ_HEAD_RE.sub("", text.lstrip())
+
+
+# 事業説明の文抽出: 理念・市場背景・法務定型文のマーカー(含む文は落とす)
+_BIZ_NOISE = (
+    "ミッション", "ビジョン", "パーパス", "経営理念", "掲げ", "スローガン",
+    "バリュー", "実現したい", "目指し", "大志", "存在意義", "を企業理念",
+    "インサイダー取引", "内閣府令", "特定上場会社", "軽微基準",
+    # 市場背景の説明文(事業そのものではない)
+    "従来の", "近年", "とりまく環境", "取り巻く環境", "市場環境", "市場規模",
+)
+# 具体的な事業・サービスを述べる文のマーカー(当たる文だけ拾う)
+_BIZ_CONCRETE = (
+    "事業を", "事業は", "事業と", "事業(", "を提供", "を運営", "を販売",
+    "を製造", "を開発", "を展開", "サービス", "セグメント", "主な事業",
+    "主として", "を中心に", "ブランド",
+)
+_SEGMENT_RE = re.compile(r"「([^「」]{2,14}事業)」")
+
+
+def extract_business(text: str, limit: int = 340) -> str:
+    """「事業の内容」から具体的な事業・サービスの文だけを抜き出す。
+
+    有報は理念・ミッション・市場背景の定型文から始まることが多いので、
+    文単位で「何を提供/運営/販売しているか」を述べる文を優先して繋ぐ。
+    1文も拾えなければ従来どおり冒頭からのスニペットに落とす。
+    """
+    flat = " ".join(clean_business(text).split())
+    sentences = [s + "。" for s in flat.split("。") if s.strip()]
+    picked: List[str] = []
+    total = 0
+    for s in sentences:
+        if any(n in s for n in _BIZ_NOISE):
+            continue
+        if not any(c in s for c in _BIZ_CONCRETE):
+            continue
+        picked.append(s)
+        total += len(s)
+        if total >= limit:
+            break
+    if not picked:
+        return _snippet(flat, limit)
+    return _snippet(" ".join(picked), limit)
+
+
+def extract_segments(text: str, cap: int = 5) -> List[str]:
+    """「◯◯事業」形式のセグメント名を出現順・重複なしで拾う。"""
+    out: List[str] = []
+    for seg in _SEGMENT_RE.findall(text):
+        if seg not in out and seg not in ("当社事業", "既存事業", "新規事業"):
+            out.append(seg)
+        if len(out) >= cap:
+            break
+    return out
 
 
 def _shares(fin_rows) -> Optional[float]:
@@ -337,7 +391,12 @@ def _card_html(row, data, tab_key: str) -> str:
     vc_line = (f' ・ VC: {_esc(" / ".join(m.get("vc_names") or []))}'
                if m.get("has_vc") else "")
     biz = data["businesses"].get(code)
-    biz_html = f'<p class="cbiz">{_esc(biz)}</p>' if biz else ""
+    segs = data.get("segments", {}).get(code) or []
+    seg_html = ('<div class="csegs">'
+                + "".join(f'<span class="tag">{_esc(s)}</span>' for s in segs)
+                + "</div>") if segs else ""
+    biz_html = (f'{seg_html}<p class="cbiz">{_esc(biz)}</p>'
+                if biz else seg_html)
     sparks = ""
     rev_s, op_s = _bars_svg(fin_rows, "revenue"), _bars_svg(fin_rows, "op_income")
     candle_s = _candles_svg(monthly_candles(data["bars"].get(code, ())))
@@ -384,7 +443,7 @@ def _tabs_html(rows, tab_key: str) -> str:
 def load_card_data(conn, codes: List[str]) -> Dict[str, Dict]:
     """カード描画に必要なデータ(決算・事業・株価・日足)をまとめて引く。"""
     data: Dict[str, Dict] = {"fins": {c: [] for c in codes}, "businesses": {},
-                             "prices": {}, "bars": {}}
+                             "segments": {}, "prices": {}, "bars": {}}
     if not codes:
         return data
     ph = ",".join("?" * len(codes))
@@ -396,7 +455,8 @@ def load_card_data(conn, codes: List[str]) -> Dict[str, Dict]:
         data["fins"][f["code"]].append(dict(f))
     for b in conn.execute(
             f"SELECT code, description FROM business WHERE code IN ({ph})", codes):
-        data["businesses"][b["code"]] = _snippet(clean_business(b["description"]), 340)
+        data["businesses"][b["code"]] = extract_business(b["description"], 340)
+        data["segments"][b["code"]] = extract_segments(b["description"])
     for p in conn.execute(
             f"SELECT code, date, close, mktcap FROM prices WHERE code IN ({ph})",
             codes):

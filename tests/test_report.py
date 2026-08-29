@@ -133,6 +133,32 @@ class TestReport(unittest.TestCase):
         self.assertIsNone(report.generate(conn, top=100))
 
 
+class TestBusinessExtraction(unittest.TestCase):
+    def test_mission_and_market_noise_dropped(self):
+        from src.report import extract_business
+        text = ("当社は「世界を変える」というミッションを掲げております。"
+                "近年、市場は拡大傾向にあります。"
+                "当社はVTuberグループ「にじさんじ」を運営しております。")
+        out = extract_business(text)
+        self.assertIn("にじさんじ", out)
+        self.assertNotIn("ミッション", out)
+        self.assertNotIn("近年", out)
+
+    def test_fallback_when_nothing_concrete(self):
+        from src.report import extract_business
+        text = "特筆すべき記載はありません。"
+        self.assertIn("特筆すべき", extract_business(text))  # 空にはしない
+
+    def test_segments_extracted(self):
+        from src.report import extract_segments
+        text = ("当社は事業(以下「エンタメ・プラットフォーム事業」)と"
+                "「エンタメ・コンテンツ事業」、および「新規事業」を営む。"
+                "また「エンタメ・プラットフォーム事業」が主力である。")
+        segs = extract_segments(text)
+        # 重複なし・出現順・汎用語(新規事業)は除外
+        self.assertEqual(segs, ["エンタメ・プラットフォーム事業", "エンタメ・コンテンツ事業"])
+
+
 class TestThemes(unittest.TestCase):
     """教師データ(バイセル/パワーエックス/yutori型)と除外対象の分類テスト。"""
 
