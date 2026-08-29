@@ -144,6 +144,14 @@ class TestBusinessExtraction(unittest.TestCase):
         self.assertNotIn("ミッション", out)
         self.assertNotIn("近年", out)
 
+    def test_segment_boilerplate_dropped_and_renyokei_kept(self):
+        from src.report import extract_business
+        text = ("当社は単一セグメントであるため、セグメント別の記載をしておりません。"
+                "産業用ポンプを製造し、国内外で販売を行っております。")
+        out = extract_business(text)
+        self.assertNotIn("単一セグメント", out)
+        self.assertIn("産業用ポンプを製造し", out)   # 連用形も具体マーカー
+
     def test_goal_wording_with_concrete_kept(self):
         # 「〜を目指し、◯◯サービスを提供」のような文は理念語があっても残す
         from src.report import extract_business
