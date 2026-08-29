@@ -144,6 +144,18 @@ class TestBusinessExtraction(unittest.TestCase):
         self.assertNotIn("ミッション", out)
         self.assertNotIn("近年", out)
 
+    def test_goal_wording_with_concrete_kept(self):
+        # 「〜を目指し、◯◯サービスを提供」のような文は理念語があっても残す
+        from src.report import extract_business
+        text = "高齢化社会への貢献を目指し、在宅介護サービスを提供しております。"
+        self.assertIn("在宅介護サービスを提供", extract_business(text))
+
+    def test_long_segment_names(self):
+        from src.report import extract_segments
+        text = "「デジタルトランスフォーメーション事業」を主力とする。"
+        self.assertEqual(extract_segments(text),
+                         ["デジタルトランスフォーメーション事業"])
+
     def test_parenthetical_period_not_split(self):
         # 「(以下「DX」という。)」の句点で文を割らない(「)の推進…」断片を作らない)
         from src.report import extract_business
@@ -152,6 +164,14 @@ class TestBusinessExtraction(unittest.TestCase):
         out = extract_business(text)
         self.assertIn("(以下「DX」という。)の推進", out)
         self.assertFalse(out.startswith(")"))
+
+    def test_quoted_period_not_split(self):
+        # 「〜となる。」の鉤括弧内句点でも割らない(バイセル型)
+        from src.report import extract_business
+        text = ("当社は「架け橋となる。」をミッションとし、"
+                "リユースサービスを提供しております。")
+        out = extract_business(text)
+        self.assertTrue(out.startswith("当社は「架け橋となる。」"))
 
     def test_fallback_when_nothing_concrete(self):
         from src.report import extract_business

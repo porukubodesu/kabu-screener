@@ -187,13 +187,17 @@ def clean_business(text: str) -> str:
     return _BIZ_HEAD_RE.sub("", text.lstrip())
 
 
-# 事業説明の文抽出: 理念・市場背景・法務定型文のマーカー(含む文は落とす)
-_BIZ_NOISE = (
+# 事業説明の文抽出のノイズは2層:
+# 強ノイズ = 法務定型文・市場背景。含む文は無条件で落とす
+_BIZ_NOISE_HARD = (
+    "インサイダー取引", "内閣府令", "特定上場会社", "軽微基準",
+    "従来の", "近年", "とりまく環境", "取り巻く環境", "市場環境", "市場規模",
+)
+# 弱ノイズ = 理念系。「〜を目指し、◯◯サービスを提供」のように具体的な
+# 事業の記述と同居することが多いため、具体マーカーが無い文だけ落とす
+_BIZ_NOISE_SOFT = (
     "ミッション", "ビジョン", "パーパス", "経営理念", "掲げ", "スローガン",
     "バリュー", "実現したい", "目指し", "大志", "存在意義", "を企業理念",
-    "インサイダー取引", "内閣府令", "特定上場会社", "軽微基準",
-    # 市場背景の説明文(事業そのものではない)
-    "従来の", "近年", "とりまく環境", "取り巻く環境", "市場環境", "市場規模",
 )
 # 具体的な事業・サービスを述べる文のマーカー(当たる文だけ拾う)
 _BIZ_CONCRETE = (
@@ -201,7 +205,7 @@ _BIZ_CONCRETE = (
     "を製造", "を開発", "を展開", "サービス", "セグメント", "主な事業",
     "主として", "を中心に", "ブランド",
 )
-_SEGMENT_RE = re.compile(r"「([^「」]{2,14}事業)」")
+_SEGMENT_RE = re.compile(r"「([^「」]{2,30}事業)」")
 
 
 def extract_business(text: str, limit: int = 340) -> str:
@@ -212,16 +216,21 @@ def extract_business(text: str, limit: int = 340) -> str:
     1文も拾えなければ従来どおり冒頭からのスニペットに落とす。
     """
     flat = " ".join(clean_business(text).split())
-    # 「(以下「DX」という。)」のような括弧内の句点では文を切らない
-    sentences = [s + "。" for s in re.split(r"。(?![)）])", flat) if s.strip()]
+    # 「(以下「DX」という。)」「〜となる。」のような括弧・鉤括弧内の句点では切らない
+    sentences = [s + "。" for s in re.split(r"。(?![)）」])", flat) if s.strip()]
     picked: List[str] = []
     total = 0
     for s in sentences:
-        if s.lstrip("。 ").startswith((")", "）")):  # 括弧閉じ始まりの断片は捨てる
+        if s.lstrip("。 ").startswith((")", "）", "」")):  # 閉じ括弧始まりの断片は捨てる
             continue
-        if any(n in s for n in _BIZ_NOISE):
+        if any(n in s for n in _BIZ_NOISE_HARD):
             continue
         if not any(c in s for c in _BIZ_CONCRETE):
+            continue
+        # 理念だけの文は落とすが、具体マーカーと同居していれば残す
+        if any(n in s for n in _BIZ_NOISE_SOFT) and not any(
+                c in s for c in ("を提供", "を運営", "を販売", "を製造",
+                                 "を開発", "を展開", "事業を", "事業は")):
             continue
         picked.append(s)
         total += len(s)
