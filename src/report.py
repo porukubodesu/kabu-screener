@@ -3,9 +3,10 @@
 data/site/ に自己完結のページ(CSS/JSインライン)を書き出す。
 daily.sh がこれを site ブランチに載せてGitHub Pagesで公開する。
 
-2ページ構成(カード描画・データ読込は共通、build_page_html):
+3ページ構成(カード描画・データ読込は共通、build_page_html):
 - index.html    発見機① 財務 (screen.pyのスコア順、このモジュールのgenerate)
 - discover.html 発見機② テーマ×事業モデル (discover.py)
+- rates.html    発見機③ 金利上昇 (rates.py。分類固有の指標は metrics["extra_chips"] で追加表示)
 
 カードはクリック不要で全情報を表示: スコア・時価総額・直近業績・指標チップ・
 事業内容・決算推移(表+ミニバー)・月足キャンドル(J-Quants日足を月次集約)・大株主。
@@ -414,6 +415,9 @@ def _card_html(row, data, tab_key: str) -> str:
         f'<span class="chip">CF率 <b>{f"{cfm:.1f}%" if cfm is not None else "-"}</b></span>',
         f'<span class="chip" title="株式数変化(分割境界の誤差あり得る)">株式数 <b>{_pct(dilution, signed=True)}{dilution_note}</b></span>',
     ]
+    # ページ固有の追加指標(発見機③のPBR・ネットキャッシュ等)。[(ラベル, 表示値), ...]
+    for label, val in (m.get("extra_chips") or []):
+        chips.append(f'<span class="chip">{_esc(str(label))} <b>{_esc(str(val))}</b></span>')
     owners = " / ".join(_esc(o) for o in (m.get("owner_names") or [])) or "個人大株主なし"
     tags = [f'<span class="tag">{_esc(sector)}</span>']
     for t in (m.get("themes") or []):
@@ -460,13 +464,19 @@ def _card_html(row, data, tab_key: str) -> str:
 </article>"""
 
 
-def _tabs_html(rows, tab_key: str) -> str:
+def _tabs_html(rows, tab_key: str, tab_order=None) -> str:
+    """タブは件数順。tab_order(タグ名のリスト)が渡されたらその順(発見機③の分類順)。"""
     counts: Dict[str, int] = {}
     for r in rows:
         for t in _row_tags(r, tab_key):
             counts[t] = counts.get(t, 0) + 1
     chips = [f'<button class="tab on" data-tag="">全て <span class="n">{len(rows)}</span></button>']
-    for t, n in sorted(counts.items(), key=lambda x: -x[1]):
+    if tab_order:
+        order = list(tab_order)
+        key = lambda x: (order.index(x[0]) if x[0] in order else len(order), -x[1])
+    else:
+        key = lambda x: -x[1]
+    for t, n in sorted(counts.items(), key=key):
         chips.append(f'<button class="tab" data-tag="{_esc(t)}">'
                      f'{_esc(t)} <span class="n">{n}</span></button>')
     return '<div class="tabs">' + "".join(chips) + "</div>"
@@ -504,10 +514,13 @@ def load_card_data(conn, codes: List[str]) -> Dict[str, Dict]:
 def build_page_html(rows, data, *, title: str, heading: str, lead: str,
                     pills: List[str], tab_key: str,
                     logic_summary: str, logic_body: str,
-                    other_page: Optional[tuple] = None) -> str:
+                    other_page=None, tab_order=None) -> str:
+    """other_page は (href, ラベル) のタプル1つ、またはそのリスト(他ページへのナビ)。
+    tab_order を渡すとタブをその順に固定する(既定は件数順)。"""
     cards = "\n".join(_card_html(r, data, tab_key) for r in rows)
-    nav = (f'<p class="nav">→ <a href="{_esc(other_page[0])}">{_esc(other_page[1])}</a></p>'
-           if other_page else "")
+    pages = [other_page] if isinstance(other_page, tuple) else list(other_page or [])
+    nav = ('<p class="nav">' + " ・ ".join(
+        f'→ <a href="{_esc(h)}">{_esc(t)}</a>' for h, t in pages) + "</p>") if pages else ""
     pills_html = "".join(f'<span class="pill">{p}</span>' for p in pills)
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -527,7 +540,7 @@ def build_page_html(rows, data, *, title: str, heading: str, lead: str,
 <details class="logic"><summary>{_esc(logic_summary)}</summary>
 <div class="box">{logic_body}</div></details>
 </div>
-{_tabs_html(rows, tab_key)}
+{_tabs_html(rows, tab_key, tab_order)}
 {cards}
 <footer>
 生成: {datetime.now().strftime("%Y-%m-%d %H:%M")} / データ: EDINET(金融庁)・IR BANK・JPX・J-Quants(終値・時価総額・日足、無料プランは12週遅延) /
@@ -595,7 +608,8 @@ def generate(conn, top: int) -> Optional[Path]:
         tab_key="sector",
         logic_summary="スクリーニングのロジック",
         logic_body=logic_body,
-        other_page=("discover.html", "発見機② テーマ×事業モデル"),
+        other_page=[("discover.html", "発見機② テーマ×事業モデル"),
+                    ("rates.html", "発見機③ 金利上昇")],
     ), encoding="utf-8")
     print(f"{out} を生成しました({run_date}, {len(rows)}行)")
     return out

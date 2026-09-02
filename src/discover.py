@@ -93,7 +93,8 @@ def generate(conn, top: int):
         tab_key="themes",
         logic_summary="発見機②のロジック",
         logic_body=logic_body,
-        other_page=("index.html", "発見機① 財務"),
+        other_page=[("index.html", "発見機① 財務"),
+                    ("rates.html", "発見機③ 金利上昇")],
     ), encoding="utf-8")
     print(f"{out} を生成しました({len(rows)}行)")
     return out

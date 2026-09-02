@@ -4,12 +4,17 @@
 
 ## 現在地 (2026-08-28 時点)
 
-**完成・運用中。毎朝7時にlaunchdが全パイプラインを回し、GitHub Pagesに2ページ公開。**
+**完成・運用中。毎朝7時にlaunchdが全パイプラインを回し、GitHub Pagesに3ページ公開。**
 
 - 発見機① 財務 (index.html): screen.pyのスコア順・業種タブ・上位300カード
 - 発見機② テーマ×事業モデル (discover.html): themes.py/discover.py。
   CF赤字許容・受託/コンサル/不動産系除外・テーマ10種タブ・上位400カード。
   教師データ (yutori/GENDA/バイセル/パワーエックス) は全員400位内で検証済み
+- 発見機③ 金利上昇 (rates.html): rates.py。銀行/保険/証券・取引所/ネットキャッシュ/
+  不動産選別の5分類を分類内パーセンタイルで採点 (2026-09-02追加)。
+  貸出比率・有利子負債はDBに無いので「経常利益 2024年度→直近の実測増益率」で代替。
+  参照銘柄 (REFERENCE_CODES: 千葉銀・第一生命・JPX・任天堂等) の位置は
+  `python -m src.rates --check` で見る。**実データでの検証は未実施** (実装環境にDB無し)
 - カードUI: 指標チップ・事業内容・決算推移(表+バー)・月足キャンドル(自前SVG、
   TradingView埋め込みは東証非対応)・大株主。J-Quants v2から終値・時価総額・日足
   (無料プランは12週遅延、日次は追加リクエストゼロで日足が蓄積)
@@ -36,6 +41,9 @@ financialsは3,692社が `source='edinet'`、事業内容 (business) は3,691社
 
 ## 次のタスク
 
+0. 発見機③を実データで初回実行して参照銘柄の位置を確認する
+   (`.venv/bin/python -m src.rates --check`)。地銀が「圏外」ばかりなら
+   経常利益の欠損 (銀行は経常収益/経常利益がサマリーに出るはず) を疑う
 1. (任意) themes.pyの辞書をユーザーフィードバックで育てる
    (「この会社が入ってない/余計」ベースの逆算キャリブレーション)
 2. (任意) J-Quantsの分割イベントで希薄化指標の境界誤差を解消
@@ -62,6 +70,7 @@ financialsは3,692社が `source='edinet'`、事業内容 (business) は3,691社
 .venv/bin/python -m unittest discover tests -v   # テスト
 .venv/bin/python -m src.fetch_edinet --help      # EDINET取得オプション
 .venv/bin/python -m src.fetch_irbank --help      # IR BANK取得オプション
+.venv/bin/python -m src.rates --check            # 発見機③: 参照銘柄の分類内順位
 sqlite3 data/screener.db                         # DB確認
 ```
 
